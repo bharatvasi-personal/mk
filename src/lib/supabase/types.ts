@@ -41,29 +41,9 @@ export interface OrderItemRow {
   created_at: string;
 }
 
-export interface Database {
-  public: {
-    Tables: {
-      items: {
-        Row: ItemRow;
-        Insert: Partial<ItemRow>;
-        Update: Partial<ItemRow>;
-      };
-      orders: {
-        Row: OrderRow;
-        Insert: Partial<OrderRow>;
-        Update: Partial<OrderRow>;
-      };
-      order_items: {
-        Row: OrderItemRow;
-        Insert: Partial<OrderItemRow>;
-        Update: Partial<OrderItemRow>;
-      };
-      admin_users: {
-        Row: { user_id: string; display_name: string; role: "staff" | "owner"; created_at: string };
-        Insert: Partial<{ user_id: string; display_name: string; role: "staff" | "owner" }>;
-        Update: Partial<{ user_id: string; display_name: string; role: "staff" | "owner" }>;
-      };
-    };
-  };
+export interface AdminUserRow {
+  user_id: string;
+  display_name: string;
+  role: "staff" | "owner";
+  created_at: string;
 }

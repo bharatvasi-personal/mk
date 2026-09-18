@@ -5,7 +5,8 @@ import { ORDER_STATUSES } from "@/lib/constants";
 
 export const runtime = "nodejs";
 
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   const user = await requireAdmin();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -25,7 +26,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const { data, error } = await service
     .from("orders")
     .update({ status })
-    .eq("id", params.id)
+    .eq("id", id)
     .select()
     .single();
 

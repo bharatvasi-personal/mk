@@ -4,14 +4,15 @@ import { checkRateLimit, getClientKey } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
-export async function GET(req: Request, { params }: { params: { code: string } }) {
+export async function GET(req: Request, { params }: { params: Promise<{ code: string }> }) {
   const clientKey = getClientKey(req);
   const { allowed } = checkRateLimit(`track:${clientKey}`, 30);
   if (!allowed) {
     return NextResponse.json({ error: "Too many requests" }, { status: 429 });
   }
 
-  const code = params.code.trim().toUpperCase();
+  const { code: rawCode } = await params;
+  const code = rawCode.trim().toUpperCase();
   const supabase = createSupabaseServiceClient();
 
   const { data: order } = await supabase
