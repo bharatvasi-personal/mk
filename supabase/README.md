@@ -9,6 +9,12 @@
      RLS policy that silently breaks admin login (only needed if you ran migrations
      before this fix landed; new setups get the corrected policy directly from
      `0001_init.sql`)
+   - `migrations/0004_menu_images_and_discounts.sql` — adds `image_url` /
+     `discount_price_paise` to items, and creates the public `menu-images`
+     storage bucket (admin-only upload, public read) used by the admin menu editor
+   - `migrations/0005_payment_status_cancelled.sql` — adds a `cancelled` payment
+     status and a `payment_failure_reason` column, so failed/cancelled checkouts
+     show up in the admin's separate "Payment Issues" view instead of the order list
 3. Create your first admin user:
    - In the Supabase dashboard, go to **Authentication → Users → Add user** and create
      an account with an email/password for yourself (or a staff member).

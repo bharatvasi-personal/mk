@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useCart } from "@/components/CartContext";
-import { formatRupees } from "@/lib/constants";
+import { effectivePricePaise, formatRupees } from "@/lib/constants";
 import type { ItemRow } from "@/lib/supabase/types";
 import Link from "next/link";
 
@@ -56,23 +56,41 @@ export default function MenuGrid() {
             const qty = quantityFor(item.id);
             return (
               <div key={item.id} className="card flex items-center gap-4 p-4">
-                <div
-                  className={`h-3 w-3 flex-shrink-0 rounded-full border-2 ${
-                    item.is_veg ? "border-green-600" : "border-maroon"
-                  }`}
-                  aria-hidden
-                >
-                  <div
-                    className={`h-full w-full scale-50 rounded-full ${
-                      item.is_veg ? "bg-green-600" : "bg-maroon"
-                    }`}
+                {item.image_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={item.image_url}
+                    alt={item.name}
+                    className="h-16 w-16 flex-shrink-0 rounded-xl object-cover"
                   />
-                </div>
+                ) : (
+                  <div
+                    className={`h-3 w-3 flex-shrink-0 rounded-full border-2 ${
+                      item.is_veg ? "border-green-600" : "border-maroon"
+                    }`}
+                    aria-hidden
+                  >
+                    <div
+                      className={`h-full w-full scale-50 rounded-full ${
+                        item.is_veg ? "bg-green-600" : "bg-maroon"
+                      }`}
+                    />
+                  </div>
+                )}
                 <div className="flex-1">
                   <p className="font-semibold text-indigo">{item.name}</p>
                   <p className="text-sm text-indigo/70">{item.description}</p>
                   <p className="mt-1 font-semibold text-maroon">
-                    {formatRupees(item.price_paise)}
+                    {item.discount_price_paise ? (
+                      <>
+                        <span className="mr-2 text-indigo/40 line-through">
+                          {formatRupees(item.price_paise)}
+                        </span>
+                        {formatRupees(item.discount_price_paise)}
+                      </>
+                    ) : (
+                      formatRupees(item.price_paise)
+                    )}
                   </p>
                 </div>
                 {item.sold_out ? (
@@ -81,7 +99,11 @@ export default function MenuGrid() {
                   <button
                     className="btn-primary px-4 py-2 text-sm"
                     onClick={() =>
-                      addItem({ itemId: item.id, name: item.name, pricePaise: item.price_paise })
+                      addItem({
+                        itemId: item.id,
+                        name: item.name,
+                        pricePaise: effectivePricePaise(item),
+                      })
                     }
                   >
                     Add

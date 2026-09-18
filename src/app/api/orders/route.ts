@@ -3,6 +3,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { generateOrderCode } from "@/lib/orderCode";
 import { getRazorpayClient } from "@/lib/razorpay";
 import { checkRateLimit, getClientKey } from "@/lib/rateLimit";
+import { effectivePricePaise } from "@/lib/constants";
 
 export const runtime = "nodejs";
 
@@ -82,12 +83,13 @@ export async function POST(req: Request) {
   let subtotalPaise = 0;
   const orderItemsPayload = body.items.map((cartItem) => {
     const dbItem = dbItems.find((i: any) => i.id === cartItem.itemId)!;
-    const lineTotal = dbItem.price_paise * cartItem.quantity;
+    const unitPrice = effectivePricePaise(dbItem);
+    const lineTotal = unitPrice * cartItem.quantity;
     subtotalPaise += lineTotal;
     return {
       item_id: dbItem.id,
       item_name: dbItem.name,
-      unit_price_paise: dbItem.price_paise,
+      unit_price_paise: unitPrice,
       quantity: cartItem.quantity,
     };
   });

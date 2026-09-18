@@ -1,11 +1,13 @@
 export type OrderStatusDB = "new" | "preparing" | "out_for_delivery" | "delivered";
-export type PaymentStatusDB = "pending" | "paid" | "failed";
+export type PaymentStatusDB = "pending" | "paid" | "failed" | "cancelled";
 
 export interface ItemRow {
   id: string;
   name: string;
   description: string;
   price_paise: number;
+  discount_price_paise: number | null;
+  image_url: string | null;
   is_veg: boolean;
   sold_out: boolean;
   display_order: number;
@@ -27,6 +29,7 @@ export interface OrderRow {
   razorpay_payment_id: string | null;
   razorpay_signature: string | null;
   payment_status: PaymentStatusDB;
+  payment_failure_reason: string | null;
   created_at: string;
   updated_at: string;
 }

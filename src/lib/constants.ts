@@ -35,3 +35,22 @@ export function nextStatus(status: OrderStatus): OrderStatus | null {
 export function formatRupees(paise: number): string {
   return `₹${(paise / 100).toFixed(0)}`;
 }
+
+export function effectivePricePaise(item: {
+  price_paise: number;
+  discount_price_paise: number | null;
+}): number {
+  return item.discount_price_paise ?? item.price_paise;
+}
+
+export const PAYMENT_ISSUE_LABELS: Record<string, string> = {
+  pending: "Incomplete",
+  failed: "Failed",
+  cancelled: "Cancelled",
+};
+
+export const PAYMENT_ISSUE_COLORS: Record<string, string> = {
+  pending: "bg-mustard/20 text-mustard",
+  failed: "bg-red-100 text-red-700",
+  cancelled: "bg-gray-200 text-gray-600",
+};

@@ -1,14 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import MenuManager from "@/components/admin/MenuManager";
 import {
   formatRupees,
   nextStatus,
   ORDER_STATUS_COLORS,
   ORDER_STATUS_LABELS,
+  PAYMENT_ISSUE_COLORS,
+  PAYMENT_ISSUE_LABELS,
   type OrderStatus,
 } from "@/lib/constants";
-import type { ItemRow } from "@/lib/supabase/types";
 
 interface AdminOrder {
   id: string;
@@ -18,6 +20,7 @@ interface AdminOrder {
   delivery_address: string;
   status: OrderStatus;
   payment_status: string;
+  payment_failure_reason: string | null;
   total_paise: number;
   created_at: string;
   order_items: { item_name: string; quantity: number }[];
@@ -25,25 +28,25 @@ interface AdminOrder {
 
 interface Stats {
   orderCount: number;
-  paidOrderCount: number;
+  issueCount: number;
   revenuePaise: number;
 }
 
 export default function AdminDashboardPage() {
   const [orders, setOrders] = useState<AdminOrder[] | null>(null);
+  const [paymentIssues, setPaymentIssues] = useState<AdminOrder[] | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
-  const [items, setItems] = useState<ItemRow[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   async function loadAll() {
-    const [ordersRes, statsRes, itemsRes] = await Promise.all([
+    const [ordersRes, issuesRes, statsRes] = await Promise.all([
       fetch("/api/admin/orders"),
+      fetch("/api/admin/orders?paymentStatus=issues"),
       fetch("/api/admin/stats"),
-      fetch("/api/menu"),
     ]);
     if (ordersRes.ok) setOrders((await ordersRes.json()).orders);
+    if (issuesRes.ok) setPaymentIssues((await issuesRes.json()).orders);
     if (statsRes.ok) setStats(await statsRes.json());
-    if (itemsRes.ok) setItems((await itemsRes.json()).items);
   }
 
   useEffect(() => {
@@ -71,20 +74,6 @@ export default function AdminDashboardPage() {
     }
   }
 
-  async function toggleSoldOut(item: ItemRow) {
-    const res = await fetch(`/api/admin/items/${item.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ soldOut: !item.sold_out }),
-    });
-    if (res.ok) {
-      setItems(
-        (prev) =>
-          prev?.map((i) => (i.id === item.id ? { ...i, sold_out: !item.sold_out } : i)) || null
-      );
-    }
-  }
-
   return (
     <div className="space-y-8">
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
@@ -93,8 +82,8 @@ export default function AdminDashboardPage() {
           <p className="text-2xl font-bold text-indigo">{stats?.orderCount ?? "—"}</p>
         </div>
         <div className="card p-4">
-          <p className="text-xs uppercase text-indigo/60">Paid Orders</p>
-          <p className="text-2xl font-bold text-indigo">{stats?.paidOrderCount ?? "—"}</p>
+          <p className="text-xs uppercase text-indigo/60">Payment Issues</p>
+          <p className="text-2xl font-bold text-indigo">{stats?.issueCount ?? "—"}</p>
         </div>
         <div className="card p-4 col-span-2 sm:col-span-1">
           <p className="text-xs uppercase text-indigo/60">Today&apos;s Revenue</p>
@@ -105,25 +94,7 @@ export default function AdminDashboardPage() {
       </div>
 
       <section>
-        <h2 className="mb-3 text-lg font-bold text-indigo">Today&apos;s Availability</h2>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {items?.map((item) => (
-            <label
-              key={item.id}
-              className="card flex items-center justify-between p-3 text-sm"
-            >
-              <span className={item.sold_out ? "text-indigo/40 line-through" : "text-indigo"}>
-                {item.name}
-              </span>
-              <input
-                type="checkbox"
-                checked={!item.sold_out}
-                onChange={() => toggleSoldOut(item)}
-                className="h-5 w-5 accent-maroon"
-              />
-            </label>
-          ))}
-        </div>
+        <MenuManager />
       </section>
 
       <section>
@@ -167,6 +138,47 @@ export default function AdminDashboardPage() {
           })}
           {orders?.length === 0 && (
             <p className="text-sm text-indigo/60">No orders yet.</p>
+          )}
+        </div>
+      </section>
+
+      <section>
+        <h2 className="mb-3 text-lg font-bold text-indigo">Payment Issues</h2>
+        <p className="mb-3 text-sm text-indigo/60">
+          Orders where checkout wasn&apos;t completed — failed, cancelled, or left
+          incomplete. These aren&apos;t confirmed orders and don&apos;t need fulfillment.
+        </p>
+        <div className="space-y-3">
+          {paymentIssues?.map((order) => (
+            <div key={order.id} className="card p-4 opacity-80">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-bold text-indigo">{order.order_code}</p>
+                  <p className="text-sm text-indigo/70">
+                    {order.customer_name} · {order.customer_phone}
+                  </p>
+                </div>
+                <span
+                  className={`badge-status ${
+                    PAYMENT_ISSUE_COLORS[order.payment_status] || "bg-gray-200 text-gray-600"
+                  }`}
+                >
+                  {PAYMENT_ISSUE_LABELS[order.payment_status] || order.payment_status}
+                </span>
+              </div>
+              <p className="text-sm text-indigo/80">
+                {order.order_items.map((oi) => `${oi.item_name} ×${oi.quantity}`).join(", ")}
+              </p>
+              {order.payment_failure_reason && (
+                <p className="mt-1 text-xs text-maroon">{order.payment_failure_reason}</p>
+              )}
+              <p className="mt-2 text-sm font-semibold text-indigo/70">
+                {formatRupees(order.total_paise)}
+              </p>
+            </div>
+          ))}
+          {paymentIssues?.length === 0 && (
+            <p className="text-sm text-indigo/60">No payment issues right now.</p>
           )}
         </div>
       </section>

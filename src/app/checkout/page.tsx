@@ -12,6 +12,21 @@ declare global {
   }
 }
 
+function reportPaymentOutcome(
+  orderId: string,
+  razorpayOrderId: string,
+  status: "failed" | "cancelled",
+  reason?: string
+) {
+  fetch("/api/orders/payment-status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ orderId, razorpay_order_id: razorpayOrderId, status, reason }),
+  }).catch(() => {
+    // best-effort — admin will still see this order stuck as "pending"
+  });
+}
+
 export default function CheckoutPage() {
   const { items, totalPaise, clear } = useCart();
   const router = useRouter();
@@ -90,8 +105,17 @@ export default function CheckoutPage() {
           }
         },
         modal: {
-          ondismiss: () => setSubmitting(false),
+          ondismiss: () => {
+            reportPaymentOutcome(orderId, razorpayOrderId, "cancelled");
+            setSubmitting(false);
+          },
         },
+      });
+
+      rzp.on("payment.failed", (response: any) => {
+        reportPaymentOutcome(orderId, razorpayOrderId, "failed", response?.error?.description);
+        setError("Payment failed. Please try again.");
+        setSubmitting(false);
       });
 
       rzp.open();

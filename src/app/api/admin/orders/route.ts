@@ -10,6 +10,7 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const status = url.searchParams.get("status");
+  const paymentStatus = url.searchParams.get("paymentStatus");
 
   const service = createSupabaseServiceClient();
   let query = service
@@ -19,6 +20,15 @@ export async function GET(req: Request) {
 
   if (status) {
     query = query.eq("status", status);
+  }
+
+  // Default: only paid orders count as "the order list". Pass
+  // paymentStatus=issues for the admin's separate failed/cancelled/incomplete
+  // payments view, or paymentStatus=all to bypass this filter entirely.
+  if (paymentStatus === "issues") {
+    query = query.neq("payment_status", "paid");
+  } else if (paymentStatus !== "all") {
+    query = query.eq("payment_status", "paid");
   }
 
   const { data, error } = await query;

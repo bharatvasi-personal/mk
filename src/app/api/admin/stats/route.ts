@@ -23,11 +23,12 @@ export async function GET() {
   }
 
   const paidOrders = (todaysOrders || []).filter((o: any) => o.payment_status === "paid");
+  const issueOrders = (todaysOrders || []).filter((o: any) => o.payment_status !== "paid");
   const revenuePaise = paidOrders.reduce((sum: number, o: any) => sum + o.total_paise, 0);
 
   return NextResponse.json({
-    orderCount: todaysOrders?.length || 0,
-    paidOrderCount: paidOrders.length,
+    orderCount: paidOrders.length,
+    issueCount: issueOrders.length,
     revenuePaise,
   });
 }
