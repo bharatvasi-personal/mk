@@ -5,6 +5,10 @@
    or `supabase db push` if you use the Supabase CLI):
    - `migrations/0001_init.sql` — tables, RLS policies, triggers
    - `migrations/0002_seed_menu.sql` — seeds the initial thali menu
+   - `migrations/0003_fix_admin_users_rls_recursion.sql` — fixes a self-referencing
+     RLS policy that silently breaks admin login (only needed if you ran migrations
+     before this fix landed; new setups get the corrected policy directly from
+     `0001_init.sql`)
 3. Create your first admin user:
    - In the Supabase dashboard, go to **Authentication → Users → Add user** and create
      an account with an email/password for yourself (or a staff member).

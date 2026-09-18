@@ -107,5 +107,7 @@ create policy "admins update orders" on public.orders
 create policy "admins read order_items" on public.order_items
   for select using (exists (select 1 from public.admin_users where user_id = auth.uid()));
 
-create policy "admins read admin_users" on public.admin_users
-  for select using (exists (select 1 from public.admin_users where user_id = auth.uid()));
+-- Non-recursive: a self-referencing subquery on admin_users here would fail
+-- (Postgres can't resolve it), silently breaking every admin auth check.
+create policy "admins read own admin_users row" on public.admin_users
+  for select using (user_id = auth.uid());
