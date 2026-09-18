@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-maroon: #9c2b3d;
+  --color-mustard: #e0a526;
+  --color-indigo: #2b3a67;
+  --color-cream: #fbf3e5;
+}
+
+body {
+  background-color: var(--color-cream);
+  color: var(--color-indigo);
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-full bg-maroon px-6 py-3 font-semibold text-cream transition hover:bg-maroon/90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center rounded-full border-2 border-indigo px-6 py-3 font-semibold text-indigo transition hover:bg-indigo hover:text-cream active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .card {
+    @apply rounded-2xl border border-mustard/30 bg-white shadow-sm;
+  }
+  .badge-status {
+    @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide;
+  }
+}
