@@ -1,0 +1,43 @@
+{
+  "name": "mithilakitchen",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Business management platform for MithilaKitchen \u2014 home-style food, Osman Nagar, Tellapur",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "npm run build -w @mk/shared && npm run build -w @mk/api && npm run build -w @mk/web",
+    "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev -w @mk/api\" \"npm run dev -w @mk/web\"",
+    "dev:api": "npm run dev -w @mk/api",
+    "dev:web": "npm run dev -w @mk/web",
+    "typecheck": "npm run typecheck -w @mk/shared && npm run typecheck -w @mk/api && npm run typecheck -w @mk/web",
+    "lint": "eslint . --max-warnings 0",
+    "test": "npm run test -w @mk/shared && npm run test -w @mk/api",
+    "db:generate": "npm run db:generate -w @mk/api",
+    "db:migrate": "npm run db:migrate -w @mk/api",
+    "db:seed": "npm run db:seed -w @mk/api",
+    "db:reset": "npm run db:reset -w @mk/api",
+    "test:e2e": "node tests/smoke.mjs"
+  },
+  "devDependencies": {
+    "@fastify/static": "^10.1.5",
+    "@types/node": "^22.10.2",
+    "concurrently": "^9.1.2",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2"
+  },
+  "allowScripts": {
+    "prisma@6.19.3": true,
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "argon2@0.41.1": true,
+    "esbuild@0.28.2": true,
+    "msgpackr-extract@3.0.4": true
+  }
+}

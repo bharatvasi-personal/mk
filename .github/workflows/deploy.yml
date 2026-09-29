@@ -1,0 +1,113 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Commit SHA to deploy (leave blank for HEAD). Use this to roll back.'
+        required: false
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        run: echo "tag=${{ github.event.inputs.image_tag || github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the API
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/mithilakitchen-api:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/mithilakitchen-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push the web app
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ vars.PUBLIC_API_URL }}
+            NEXT_PUBLIC_SITE_URL=${{ vars.PUBLIC_SITE_URL }}
+            NEXT_PUBLIC_RAZORPAY_KEY_ID=${{ vars.RAZORPAY_KEY_ID }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/mithilakitchen-web:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/mithilakitchen-web:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -eu
+            cd /opt/mithilakitchen
+            export IMAGE_TAG=${{ needs.build.outputs.tag }}
+            export GHCR_OWNER=${{ github.repository_owner }}
+
+            # A backup before every deploy. A migration that goes wrong at 12:40 pm on a
+            # Saturday needs a way back that does not depend on last night's job.
+            docker compose exec -T backup /scripts/backup.sh || echo "pre-deploy backup skipped"
+
+            docker compose -f infra/compose/docker-compose.yml \
+                           -f infra/compose/docker-compose.prod.yml pull
+
+            # Migrations run before the new code, and the security SQL runs after them so
+            # any new table picks up its RLS policy. Missing that step would leave a new
+            # table silently unprotected.
+            docker compose -f infra/compose/docker-compose.yml \
+                           -f infra/compose/docker-compose.prod.yml \
+                           run --rm api npm run db:migrate:deploy
+            docker compose -f infra/compose/docker-compose.yml \
+                           -f infra/compose/docker-compose.prod.yml \
+                           run --rm api npm run db:security
+
+            docker compose -f infra/compose/docker-compose.yml \
+                           -f infra/compose/docker-compose.prod.yml up -d
+
+            for i in $(seq 1 30); do
+              curl -sf http://localhost/api/health/ready && break
+              sleep 3
+            done
+            curl -sf http://localhost/api/health/ready || {
+              echo "Deploy failed its health check. Roll back with:"
+              echo "  IMAGE_TAG=<previous-sha> docker compose ... up -d"
+              exit 1
+            }
+
+            docker image prune -f

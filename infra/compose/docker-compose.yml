@@ -1,0 +1,95 @@
+# Development stack. `docker compose -f infra/compose/docker-compose.yml up -d`
+#
+# Production adds Caddy, the api/web containers and pgBackRest via the prod override.
+# Keeping dev to just the stateful services means `npm run dev` still gives fast
+# reloads, which matters more than dev/prod symmetry on a two-week runway.
+
+name: mithilakitchen
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mithilakitchen}
+      POSTGRES_USER: ${POSTGRES_USER:-mk_owner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mk_owner_dev_password}
+      # Collation matters for ORDER BY on Hindi/Telugu names.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C.UTF-8'
+    command:
+      - postgres
+      # Continuous WAL archiving is what gives the 5-minute RPO. Even in dev, so the
+      # setting is exercised rather than discovered in production.
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=/bin/true
+      - -c
+      - archive_timeout=300
+      - -c
+      - max_wal_size=1GB
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=2GB
+      - -c
+      - work_mem=16MB
+      # Log anything slower than a quarter second — at this volume nothing should be.
+      - -c
+      - log_min_duration_statement=250
+    ports: ['5432:5432']
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-mk_owner} -d ${POSTGRES_DB:-mithilakitchen}']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # No persistence: Redis holds queues, rate limits and OTPs, none of which are
+    # business data. Losing it costs nothing by design.
+    command: ['redis-server', '--save', '', '--appendonly', 'no', '--maxmemory', '256mb', '--maxmemory-policy', 'allkeys-lru']
+    ports: ['6379:6379']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # S3-compatible object storage for local development.
+  #
+  # SeaweedFS rather than MinIO: MinIO's container images are no longer publicly
+  # pullable from Docker Hub or quay.io, and a dev stack that needs a registry login is
+  # a dev stack that breaks for the next person. SeaweedFS speaks enough of the S3 API
+  # for presigned PUT/GET, which is all this application uses.
+  #
+  # Production points S3_ENDPOINT at Backblaze B2 or Cloudflare R2 instead — both are
+  # cheaper than running this, and both do cross-region replication for us.
+  s3:
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    command:
+      - server
+      - -dir=/data
+      - -s3
+      - -s3.port=9000
+      - -s3.config=/etc/seaweedfs/s3.json
+      - -master.volumeSizeLimitMB=1024
+    ports: ['9000:9000', '8333:8333']
+    volumes:
+      - s3data:/data
+      - ../s3/s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O- http://localhost:9000 2>&1 | head -c1 || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  pgdata:
+  s3data:

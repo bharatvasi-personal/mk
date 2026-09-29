@@ -1,0 +1,102 @@
+# Production overlay. Deployed to /opt/mithilakitchen on the VPS.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Images are built by CI and tagged with the commit SHA, so a rollback is
+# `IMAGE_TAG=<previous-sha> docker compose up -d`.
+
+name: mithilakitchen
+
+services:
+  postgres:
+    ports: []          # never exposed to the internet; reachable only on the compose network
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./backups:/backups
+
+  redis:
+    ports: []
+
+  # Production normally points S3_* at Backblaze B2 or Cloudflare R2 and this service
+  # is not started at all. Keep it only if you genuinely want to self-host the objects,
+  # in which case it must be included in the backup plan — it holds the legal documents.
+  s3:
+    ports: ['127.0.0.1:9000:9000']
+
+  api:
+    image: ghcr.io/${GHCR_OWNER}/mithilakitchen-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: [../../.env]
+    environment:
+      NODE_ENV: production
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:4000/api/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { memory: 1G }
+
+  # Same image, different entrypoint: scheduled jobs and the notification outbox run
+  # in their own container so a long report rollup cannot make the POS wait.
+  worker:
+    image: ghcr.io/${GHCR_OWNER}/mithilakitchen-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ['node', 'dist/worker.js']
+    env_file: [../../.env]
+    environment:
+      NODE_ENV: production
+      ROLE: worker
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { memory: 512M }
+
+  web:
+    image: ghcr.io/${GHCR_OWNER}/mithilakitchen-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: [../../.env]
+    environment:
+      NODE_ENV: production
+    depends_on: [api]
+    deploy:
+      resources:
+        limits: { memory: 768M }
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ['80:80', '443:443', '443:443/udp']
+    volumes:
+      - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    environment:
+      DOMAIN: ${DOMAIN:-mithilakitchen.in}
+    depends_on: [api, web]
+
+  # Nightly logical backup + an automated restore verification. The verification is the
+  # point: an unverified backup chain is the normal way a business discovers it had none.
+  backup:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    env_file: [../../.env]
+    volumes:
+      - ./backups:/backups
+      - ../scripts:/scripts:ro
+    entrypoint: ['/bin/sh', '/scripts/backup-loop.sh']
+    depends_on:
+      postgres: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  s3data:
+  caddydata:
+  caddyconfig:

@@ -1,0 +1,52 @@
+#cloud-config
+# Brings a bare Ubuntu box to the point where `make deploy` works. Everything beyond this
+# is the Compose file's job — the server itself stays boring and reproducible.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - ufw
+  - fail2ban
+  - unattended-upgrades
+  - age
+  - postgresql-client
+  - make
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-hardening.conf
+    content: |
+      PasswordAuthentication no
+      PermitRootLogin prohibit-password
+      X11Forwarding no
+      MaxAuthTries 3
+
+  - path: /etc/sysctl.d/99-${project}.conf
+    content: |
+      # Postgres and Redis both want this; the default overcommit heuristic causes
+      # spurious fork failures under memory pressure.
+      vm.overcommit_memory = 1
+      net.core.somaxconn = 1024
+
+runcmd:
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - systemctl enable --now docker
+  - mkdir -p /opt/${project}/backups
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443
+  - ufw --force enable
+  - systemctl enable --now fail2ban
+  - systemctl restart ssh
+  # Security patches apply themselves; nobody is going to SSH in weekly to do it.
+  - dpkg-reconfigure -f noninteractive unattended-upgrades

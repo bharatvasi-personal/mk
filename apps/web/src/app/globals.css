@@ -1,0 +1,87 @@
+@import 'tailwindcss';
+
+/*
+ * The palette is warm and earthy rather than the usual restaurant-tech blue: this is a
+ * home-food brand, and the counter staff will look at the POS for ten hours a day.
+ * Contrast ratios are checked against WCAG AA because the tablet lives under a tube
+ * light next to a window.
+ */
+@theme {
+  --color-brand-50: #fdf6ed;
+  --color-brand-100: #f8e7cd;
+  --color-brand-200: #f0cb98;
+  --color-brand-300: #e6a95f;
+  --color-brand-400: #dd8c38;
+  --color-brand-500: #c96f1d;
+  --color-brand-600: #a85516;
+  --color-brand-700: #853f16;
+  --color-brand-800: #6c3417;
+  --color-brand-900: #5a2c16;
+
+  --color-leaf-500: #4b7f52;
+  --color-leaf-600: #3b6742;
+  --color-leaf-100: #e3efe4;
+
+  --color-ink-50: #f7f6f4;
+  --color-ink-100: #eeece8;
+  --color-ink-200: #ddd9d2;
+  --color-ink-400: #a39c91;
+  --color-ink-600: #5f584e;
+  --color-ink-800: #332e28;
+  --color-ink-900: #211d19;
+
+  --font-display: 'Georgia', 'Times New Roman', serif;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--color-ink-50);
+  color: var(--color-ink-900);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Devanagari and Telugu need a little more line height than Latin at the same size.
+   The attribute (rather than :lang() on body) is set by the [locale] layout. */
+[lang='hi'],
+[lang='te'] {
+  line-height: 1.7;
+}
+
+/*
+ * POS touch targets. A helper is tapping this with wet hands while three people wait,
+ * so nothing interactive in the POS is smaller than 44px and taps must not select text.
+ */
+.pos-tap {
+  min-height: 44px;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+@media print {
+  /* The thermal bill is printed from a hidden div; everything else disappears. */
+  body * {
+    visibility: hidden;
+  }
+  #thermal-bill,
+  #thermal-bill * {
+    visibility: visible;
+  }
+  #thermal-bill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 58mm;
+    font-family: ui-monospace, 'Courier New', monospace;
+    font-size: 10px;
+    line-height: 1.35;
+    color: #000;
+  }
+  @page {
+    margin: 2mm;
+    size: 58mm auto;
+  }
+}

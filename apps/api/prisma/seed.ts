@@ -1,0 +1,831 @@
+/**
+ * Seeds MithilaKitchen as tenant #1 with the Osman Nagar branch, a realistic menu at
+ * realistic Hyderabad prices, real-shaped vendors, an inventory list with recipes for
+ * the top dishes, staff, shifts and the legal-document checklist.
+ *
+ * Everything here is a starting point to be corrected with real numbers before 15 Oct —
+ * the point is that the system is never empty, so the team can practise on it.
+ *
+ * Idempotent: safe to re-run.
+ */
+import { PrismaClient } from '@prisma/client';
+import * as argon2 from 'argon2';
+
+/**
+ * Seeding connects with the privileged migration role, not the application role.
+ *
+ * The app role is subject to FORCEd row-level security, and the very first insert here
+ * creates the tenant that the policies key on — a chicken-and-egg that is correct to
+ * resolve by using the owner role rather than by weakening the policy.
+ */
+const prisma = new PrismaClient({
+  datasourceUrl: process.env.DATABASE_MIGRATION_URL || process.env.DATABASE_URL,
+});
+
+const OWNER_EMAIL = process.env.SEED_OWNER_EMAIL ?? 'owner@mithilakitchen.in';
+const OWNER_PASSWORD = process.env.SEED_OWNER_PASSWORD ?? 'ChangeMe@12345';
+
+/** Rupees to paise, so the seed data reads like a menu board. */
+const R = (rupees: number): number => Math.round(rupees * 100);
+
+async function main(): Promise<void> {
+  console.log('Seeding MithilaKitchen…\n');
+
+  // Seeding writes across tenants by definition, and runs as the migration role.
+  const tenant = await prisma.tenant.upsert({
+    where: { slug: 'mithilakitchen' },
+    create: {
+      slug: 'mithilakitchen',
+      name: 'MithilaKitchen',
+      legalName: 'MithilaKitchen (Partnership Firm)',
+      entityType: 'PARTNERSHIP_FIRM',
+      timezone: 'Asia/Kolkata',
+      fyStartMonth: 4,
+      settings: {
+        tagline: 'Proper home food. Less oil. Fresh vegetables.',
+        upiId: 'mithilakitchen@upi',
+      },
+    },
+    update: {},
+  });
+  console.log(`tenant  ${tenant.name} (${tenant.id})`);
+
+  await prisma.$executeRawUnsafe(`SELECT set_config('app.tenant_id', '${tenant.id}', false)`);
+
+  const branch = await prisma.branch.upsert({
+    where: { tenantId_code: { tenantId: tenant.id, code: 'OSN' } },
+    create: {
+      tenantId: tenant.id,
+      code: 'OSN',
+      name: 'Osman Nagar',
+      addressLine1: 'Shop No. 1, Osman Nagar Road',
+      addressLine2: 'Tellapur',
+      city: 'Hyderabad',
+      state: 'Telangana',
+      pincode: '502300',
+      lat: 17.4899,
+      lng: 78.2861,
+      phone: '9000000000',
+      geofenceRadiusM: 100,
+      openingDate: new Date('2026-10-15'),
+      operatingHours: {
+        LUNCH: { open: '11:30', close: '15:30' },
+        CHAI: { open: '07:00', close: '22:00' },
+        EVENING: { open: '17:30', close: '22:30' },
+        weeklyOff: null,
+      },
+    },
+    update: {},
+  });
+  console.log(`branch  ${branch.name} (${branch.code})`);
+
+  // ─── Units ────────────────────────────────────────────────────────────────
+  const uomDefs = [
+    { code: 'kg', name: 'Kilogram' },
+    { code: 'g', name: 'Gram', baseCode: 'kg', factorToBase: 0.001 },
+    { code: 'L', name: 'Litre' },
+    { code: 'ml', name: 'Millilitre', baseCode: 'L', factorToBase: 0.001 },
+    { code: 'pcs', name: 'Pieces' },
+    { code: 'pkt', name: 'Packet' },
+    { code: 'cyl', name: 'Gas cylinder' },
+    { code: 'bundle', name: 'Bundle' },
+  ];
+  const uoms: Record<string, string> = {};
+  for (const u of uomDefs) {
+    const row = await prisma.uom.upsert({
+      where: { tenantId_code: { tenantId: tenant.id, code: u.code } },
+      create: { tenantId: tenant.id, ...u },
+      update: {},
+    });
+    uoms[u.code] = row.id;
+  }
+
+  // ─── Users ────────────────────────────────────────────────────────────────
+  const owner = await prisma.user.upsert({
+    where: { tenantId_email: { tenantId: tenant.id, email: OWNER_EMAIL } },
+    create: {
+      tenantId: tenant.id,
+      name: 'Founding Partner',
+      email: OWNER_EMAIL,
+      phone: '9000000001',
+      passwordHash: await argon2.hash(OWNER_PASSWORD, { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 }),
+    },
+    update: {},
+  });
+  // A compound unique containing a NULL cannot be matched by `upsert`, so the
+  // tenant-wide grant is created conditionally.
+  if (!(await prisma.userBranchRole.findFirst({ where: { userId: owner.id, role: 'OWNER' } }))) {
+    await prisma.userBranchRole.create({
+      data: { tenantId: tenant.id, userId: owner.id, role: 'OWNER', branchId: null },
+    });
+  }
+
+  const manager = await prisma.user.upsert({
+    where: { tenantId_email: { tenantId: tenant.id, email: 'manager@mithilakitchen.in' } },
+    create: {
+      tenantId: tenant.id,
+      name: 'Branch Manager',
+      email: 'manager@mithilakitchen.in',
+      phone: '9000000002',
+      locale: 'te',
+      passwordHash: await argon2.hash('Manager@12345', { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 }),
+    },
+    update: {},
+  });
+  if (!(await prisma.userBranchRole.findFirst({ where: { userId: manager.id, branchId: branch.id } }))) {
+    await prisma.userBranchRole.create({
+      data: { tenantId: tenant.id, userId: manager.id, role: 'MANAGER', branchId: branch.id },
+    });
+  }
+
+  const helperUser = await prisma.user.upsert({
+    where: { tenantId_email: { tenantId: tenant.id, email: 'counter@mithilakitchen.in' } },
+    create: {
+      tenantId: tenant.id,
+      name: 'Counter Staff',
+      email: 'counter@mithilakitchen.in',
+      phone: '9000000003',
+      locale: 'hi',
+      passwordHash: await argon2.hash('Counter@12345', { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 }),
+    },
+    update: {},
+  });
+  if (!(await prisma.userBranchRole.findFirst({ where: { userId: helperUser.id, branchId: branch.id } }))) {
+    await prisma.userBranchRole.create({
+      data: { tenantId: tenant.id, userId: helperUser.id, role: 'HELPER', branchId: branch.id },
+    });
+  }
+  console.log('users   owner / manager / counter');
+
+  // ─── Menu ─────────────────────────────────────────────────────────────────
+  // Prices are Tellapur-realistic for Oct 2026: a working-class thali at ₹90–130,
+  // chai at ₹12, Chinese plates at ₹70–120. Correct these against your real costing.
+  const menu: {
+    category: string;
+    categoryTe: string;
+    categoryHi: string;
+    slot: 'LUNCH' | 'CHAI' | 'EVENING' | 'ALL_DAY';
+    items: {
+      name: string;
+      hi?: string;
+      te?: string;
+      desc?: string;
+      type?: 'VEG' | 'NON_VEG' | 'EGG';
+      lessOil?: boolean;
+      mithila?: boolean;
+      variants: { name: string; price: number }[];
+    }[];
+  }[] = [
+    {
+      category: 'Thali',
+      categoryHi: 'थाली',
+      categoryTe: 'థాలీ',
+      slot: 'LUNCH',
+      items: [
+        {
+          name: 'Veg Thali',
+          hi: 'वेज थाली',
+          te: 'వెజ్ థాలీ',
+          desc: 'Rice, dal, two seasonal vegetables, roti, salad, pickle, papad',
+          lessOil: true,
+          variants: [
+            { name: 'Regular', price: 100 },
+            { name: 'Full', price: 130 },
+          ],
+        },
+        {
+          name: 'Special Mithila Thali',
+          hi: 'स्पेशल मिथिला थाली',
+          te: 'స్పెషల్ మిథిలా థాలీ',
+          desc: 'Rice, dal, aloo-bhujia, seasonal saag, dahi, chutney, papad, sweet',
+          mithila: true,
+          lessOil: true,
+          variants: [{ name: 'Regular', price: 150 }],
+        },
+        {
+          name: 'Chicken Thali',
+          hi: 'चिकन थाली',
+          te: 'చికెన్ థాలీ',
+          desc: 'Rice, dal, home-style chicken curry, roti, salad',
+          type: 'NON_VEG',
+          variants: [{ name: 'Regular', price: 180 }],
+        },
+        {
+          name: 'Egg Thali',
+          hi: 'अंडा थाली',
+          te: 'ఎగ్ థాలీ',
+          type: 'EGG',
+          variants: [{ name: 'Regular', price: 130 }],
+        },
+      ],
+    },
+    {
+      category: 'Mithila Specials',
+      categoryHi: 'मिथिला स्पेशल',
+      categoryTe: 'మిథిలా స్పెషల్స్',
+      slot: 'LUNCH',
+      items: [
+        {
+          name: 'Litti Chokha',
+          hi: 'लिट्टी चोखा',
+          te: 'లిట్టీ చోఖా',
+          desc: 'Roasted wheat balls stuffed with sattu, with brinjal-tomato chokha',
+          mithila: true,
+          lessOil: true,
+          variants: [
+            { name: '2 pcs', price: 70 },
+            { name: '4 pcs', price: 130 },
+          ],
+        },
+        {
+          name: 'Dal Pitha',
+          hi: 'दाल पिठा',
+          te: 'దాల్ పిఠా',
+          desc: 'Steamed rice dumplings stuffed with spiced lentils',
+          mithila: true,
+          lessOil: true,
+          variants: [{ name: '4 pcs', price: 80 }],
+        },
+        {
+          name: 'Sattu Paratha',
+          hi: 'सत्तू पराठा',
+          te: 'సత్తు పరాఠా',
+          mithila: true,
+          variants: [{ name: '2 pcs', price: 60 }],
+        },
+      ],
+    },
+    {
+      category: 'Chai & Snacks',
+      categoryHi: 'चाय और नाश्ता',
+      categoryTe: 'చాయ్ & స్నాక్స్',
+      slot: 'CHAI',
+      items: [
+        {
+          name: 'Masala Chai',
+          hi: 'मसाला चाय',
+          te: 'మసాలా చాయ్',
+          variants: [
+            { name: 'Cutting', price: 12 },
+            { name: 'Full', price: 20 },
+          ],
+        },
+        { name: 'Filter Coffee', hi: 'फिल्टर कॉफी', te: 'ఫిల్టర్ కాఫీ', variants: [{ name: 'Regular', price: 25 }] },
+        { name: 'Samosa', hi: 'समोसा', te: 'సమోసా', variants: [{ name: '1 pc', price: 15 }] },
+        { name: 'Poha', hi: 'पोहा', te: 'పోహా', lessOil: true, variants: [{ name: 'Plate', price: 40 }] },
+        { name: 'Idli Sambar', hi: 'इडली सांभर', te: 'ఇడ్లీ సాంబార్', lessOil: true, variants: [{ name: '2 pcs', price: 40 }] },
+      ],
+    },
+    {
+      category: 'Chinese Counter',
+      categoryHi: 'चाइनीज़',
+      categoryTe: 'చైనీస్',
+      slot: 'EVENING',
+      items: [
+        {
+          name: 'Veg Noodles',
+          hi: 'वेज नूडल्स',
+          te: 'వెజ్ నూడుల్స్',
+          variants: [
+            { name: 'Half', price: 70 },
+            { name: 'Full', price: 110 },
+          ],
+        },
+        {
+          name: 'Veg Fried Rice',
+          hi: 'वेज फ्राइड राइस',
+          te: 'వెజ్ ఫ్రైడ్ రైస్',
+          variants: [
+            { name: 'Half', price: 70 },
+            { name: 'Full', price: 110 },
+          ],
+        },
+        {
+          name: 'Chicken Noodles',
+          hi: 'चिकन नूडल्स',
+          te: 'చికెన్ నూడుల్స్',
+          type: 'NON_VEG',
+          variants: [
+            { name: 'Half', price: 90 },
+            { name: 'Full', price: 140 },
+          ],
+        },
+        {
+          name: 'Gobi Manchurian',
+          hi: 'गोभी मंचूरियन',
+          te: 'గోబీ మంచూరియన్',
+          variants: [{ name: 'Plate', price: 90 }],
+        },
+        { name: 'Egg Fried Rice', hi: 'अंडा फ्राइड राइस', te: 'ఎగ్ ఫ్రైడ్ రైస్', type: 'EGG', variants: [{ name: 'Full', price: 100 }] },
+      ],
+    },
+  ];
+
+  const variantIds: Record<string, string> = {};
+
+  for (const [ci, cat] of menu.entries()) {
+    const category = await prisma.menuCategory.upsert({
+      where: { tenantId_slug: { tenantId: tenant.id, slug: slugify(cat.category) } },
+      create: {
+        tenantId: tenant.id,
+        name: cat.category,
+        nameI18n: { hi: cat.categoryHi, te: cat.categoryTe },
+        slug: slugify(cat.category),
+        mealSlot: cat.slot,
+        sortOrder: ci,
+      },
+      update: {},
+    });
+
+    for (const [ii, item] of cat.items.entries()) {
+      const menuItem = await prisma.menuItem.upsert({
+        where: { tenantId_slug: { tenantId: tenant.id, slug: slugify(item.name) } },
+        create: {
+          tenantId: tenant.id,
+          categoryId: category.id,
+          name: item.name,
+          nameI18n: { hi: item.hi ?? item.name, te: item.te ?? item.name },
+          slug: slugify(item.name),
+          description: item.desc,
+          foodType: item.type ?? 'VEG',
+          isLessOil: item.lessOil ?? false,
+          isMithilaSpecial: item.mithila ?? false,
+          targetFoodCostPct: 32,
+          sortOrder: ii,
+        },
+        update: {},
+      });
+
+      for (const [vi, v] of item.variants.entries()) {
+        const variant = await prisma.menuItemVariant.upsert({
+          where: { menuItemId_name: { menuItemId: menuItem.id, name: v.name } },
+          create: {
+            tenantId: tenant.id,
+            menuItemId: menuItem.id,
+            name: v.name,
+            isDefault: vi === 0,
+            sortOrder: vi,
+          },
+          update: {},
+        });
+        variantIds[`${item.name}|${v.name}`] = variant.id;
+
+        await prisma.branchMenuItem.upsert({
+          where: {
+            branchId_variantId_mealSlot: {
+              branchId: branch.id,
+              variantId: variant.id,
+              mealSlot: cat.slot,
+            },
+          },
+          create: {
+            tenantId: tenant.id,
+            branchId: branch.id,
+            menuItemId: menuItem.id,
+            variantId: variant.id,
+            mealSlot: cat.slot,
+            priceMinor: R(v.price),
+            gstRateBp: 500,
+            // A 12x18 shop genuinely runs out. Cap the thali so the online store stops selling.
+            dailyLimit: item.name.includes('Thali') ? 80 : null,
+          },
+          update: {},
+        });
+      }
+    }
+  }
+  console.log(`menu    ${menu.reduce((s, c) => s + c.items.length, 0)} items across ${menu.length} categories`);
+
+  // ─── Tables ───────────────────────────────────────────────────────────────
+  for (const label of ['T1', 'T2', 'T3', 'T4']) {
+    await prisma.diningTable.upsert({
+      where: { branchId_label: { branchId: branch.id, label } },
+      create: { tenantId: tenant.id, branchId: branch.id, label, seats: 4 },
+      update: {},
+    });
+  }
+
+  // ─── Vendors ──────────────────────────────────────────────────────────────
+  const vendorDefs = [
+    { code: 'VEG-MANDI', name: 'Tellapur Vegetable Mandi', category: 'Vegetables', creditDays: 0, phone: '9000010001' },
+    { code: 'KIRANA-SL', name: 'Sri Lakshmi Kirana & General Stores', category: 'Groceries', creditDays: 15, phone: '9000010002' },
+    { code: 'DAIRY-VJ', name: 'Vijaya Dairy Distributor', category: 'Dairy', creditDays: 7, phone: '9000010003' },
+    { code: 'GAS-BH', name: 'Bharat Gas Commercial', category: 'LPG', creditDays: 0, phone: '9000010004' },
+    { code: 'PACK-SR', name: 'Sri Ram Packaging', category: 'Packaging', creditDays: 10, phone: '9000010005' },
+    { code: 'MEAT-AL', name: 'Al-Noor Chicken Centre', category: 'Meat', creditDays: 3, phone: '9000010006' },
+  ];
+  const vendors: Record<string, string> = {};
+  for (const v of vendorDefs) {
+    const row = await prisma.vendor.upsert({
+      where: { tenantId_code: { tenantId: tenant.id, code: v.code } },
+      create: { tenantId: tenant.id, ...v, city: 'Hyderabad', pincode: '502300' },
+      update: {},
+    });
+    vendors[v.code] = row.id;
+  }
+  console.log(`vendors ${vendorDefs.length}`);
+
+  // ─── Inventory ────────────────────────────────────────────────────────────
+  // Buying rhythm is the field that makes the purchase worklist usable: the daily-fresh
+  // list is a phone screen at the mandi, the monthly list is a PO to a distributor.
+  const inv: {
+    sku: string;
+    name: string;
+    hi?: string;
+    category: 'PERISHABLE' | 'STAPLE' | 'SPICE' | 'DAIRY' | 'PACKAGING' | 'GAS' | 'BEVERAGE' | 'CONSUMABLE';
+    uom: string;
+    rhythm: 'DAILY' | 'WEEKLY' | 'FORTNIGHTLY' | 'MONTHLY' | 'AS_NEEDED';
+    cost: number;
+    reorder: number;
+    par: number;
+    vendor: string;
+    shelfLife?: number;
+  }[] = [
+    { sku: 'RICE-SONA', name: 'Sona Masoori Rice', hi: 'चावल', category: 'STAPLE', uom: 'kg', rhythm: 'WEEKLY', cost: 52, reorder: 15, par: 50, vendor: 'KIRANA-SL' },
+    { sku: 'DAL-TOOR', name: 'Toor Dal', hi: 'अरहर दाल', category: 'STAPLE', uom: 'kg', rhythm: 'WEEKLY', cost: 145, reorder: 5, par: 20, vendor: 'KIRANA-SL' },
+    { sku: 'ATTA', name: 'Wheat Atta', hi: 'आटा', category: 'STAPLE', uom: 'kg', rhythm: 'WEEKLY', cost: 42, reorder: 10, par: 40, vendor: 'KIRANA-SL' },
+    { sku: 'SATTU', name: 'Sattu (roasted gram flour)', category: 'STAPLE', uom: 'kg', rhythm: 'FORTNIGHTLY', cost: 120, reorder: 2, par: 8, vendor: 'KIRANA-SL' },
+    { sku: 'OIL-SUN', name: 'Sunflower Oil', hi: 'तेल', category: 'STAPLE', uom: 'L', rhythm: 'WEEKLY', cost: 135, reorder: 5, par: 20, vendor: 'KIRANA-SL' },
+    { sku: 'ONION', name: 'Onion', hi: 'प्याज़', category: 'PERISHABLE', uom: 'kg', rhythm: 'DAILY', cost: 32, reorder: 5, par: 20, vendor: 'VEG-MANDI', shelfLife: 14 },
+    { sku: 'TOMATO', name: 'Tomato', hi: 'टमाटर', category: 'PERISHABLE', uom: 'kg', rhythm: 'DAILY', cost: 28, reorder: 4, par: 15, vendor: 'VEG-MANDI', shelfLife: 5 },
+    { sku: 'POTATO', name: 'Potato', hi: 'आलू', category: 'PERISHABLE', uom: 'kg', rhythm: 'DAILY', cost: 26, reorder: 8, par: 30, vendor: 'VEG-MANDI', shelfLife: 21 },
+    { sku: 'BRINJAL', name: 'Brinjal', category: 'PERISHABLE', uom: 'kg', rhythm: 'DAILY', cost: 35, reorder: 2, par: 8, vendor: 'VEG-MANDI', shelfLife: 4 },
+    { sku: 'SAAG', name: 'Seasonal Saag', category: 'PERISHABLE', uom: 'bundle', rhythm: 'DAILY', cost: 15, reorder: 5, par: 20, vendor: 'VEG-MANDI', shelfLife: 2 },
+    { sku: 'CABBAGE', name: 'Cabbage', category: 'PERISHABLE', uom: 'kg', rhythm: 'DAILY', cost: 24, reorder: 2, par: 10, vendor: 'VEG-MANDI', shelfLife: 7 },
+    { sku: 'CAULI', name: 'Cauliflower', category: 'PERISHABLE', uom: 'kg', rhythm: 'DAILY', cost: 38, reorder: 2, par: 8, vendor: 'VEG-MANDI', shelfLife: 5 },
+    { sku: 'CORIANDER', name: 'Coriander', category: 'PERISHABLE', uom: 'bundle', rhythm: 'DAILY', cost: 10, reorder: 3, par: 12, vendor: 'VEG-MANDI', shelfLife: 3 },
+    { sku: 'CHICKEN', name: 'Chicken (curry cut)', category: 'PERISHABLE', uom: 'kg', rhythm: 'DAILY', cost: 220, reorder: 2, par: 8, vendor: 'MEAT-AL', shelfLife: 2 },
+    { sku: 'EGG', name: 'Eggs', category: 'PERISHABLE', uom: 'pcs', rhythm: 'DAILY', cost: 7, reorder: 30, par: 120, vendor: 'KIRANA-SL', shelfLife: 14 },
+    { sku: 'MILK', name: 'Milk', hi: 'दूध', category: 'DAIRY', uom: 'L', rhythm: 'DAILY', cost: 62, reorder: 5, par: 25, vendor: 'DAIRY-VJ', shelfLife: 2 },
+    { sku: 'CURD', name: 'Curd', hi: 'दही', category: 'DAIRY', uom: 'kg', rhythm: 'DAILY', cost: 70, reorder: 2, par: 10, vendor: 'DAIRY-VJ', shelfLife: 3 },
+    { sku: 'PANEER', name: 'Paneer', category: 'DAIRY', uom: 'kg', rhythm: 'AS_NEEDED', cost: 340, reorder: 1, par: 4, vendor: 'DAIRY-VJ', shelfLife: 3 },
+    { sku: 'TEA-DUST', name: 'Tea Dust', hi: 'चाय पत्ती', category: 'BEVERAGE', uom: 'kg', rhythm: 'MONTHLY', cost: 280, reorder: 1, par: 5, vendor: 'KIRANA-SL' },
+    { sku: 'SUGAR', name: 'Sugar', hi: 'चीनी', category: 'STAPLE', uom: 'kg', rhythm: 'MONTHLY', cost: 46, reorder: 5, par: 25, vendor: 'KIRANA-SL' },
+    { sku: 'SPICE-TUR', name: 'Turmeric Powder', category: 'SPICE', uom: 'kg', rhythm: 'MONTHLY', cost: 240, reorder: 0.5, par: 2, vendor: 'KIRANA-SL' },
+    { sku: 'SPICE-CHI', name: 'Chilli Powder', category: 'SPICE', uom: 'kg', rhythm: 'MONTHLY', cost: 320, reorder: 0.5, par: 3, vendor: 'KIRANA-SL' },
+    { sku: 'SPICE-GAR', name: 'Garam Masala', category: 'SPICE', uom: 'kg', rhythm: 'MONTHLY', cost: 520, reorder: 0.25, par: 1, vendor: 'KIRANA-SL' },
+    { sku: 'SALT', name: 'Salt', category: 'SPICE', uom: 'kg', rhythm: 'MONTHLY', cost: 22, reorder: 2, par: 10, vendor: 'KIRANA-SL' },
+    { sku: 'NOODLES', name: 'Hakka Noodles', category: 'STAPLE', uom: 'kg', rhythm: 'WEEKLY', cost: 90, reorder: 2, par: 10, vendor: 'KIRANA-SL' },
+    { sku: 'SOYA-SAUCE', name: 'Soya Sauce', category: 'STAPLE', uom: 'L', rhythm: 'MONTHLY', cost: 130, reorder: 1, par: 4, vendor: 'KIRANA-SL' },
+    { sku: 'PKG-BOX', name: 'Meal Box (750ml)', category: 'PACKAGING', uom: 'pcs', rhythm: 'AS_NEEDED', cost: 8, reorder: 100, par: 500, vendor: 'PACK-SR' },
+    { sku: 'PKG-BAG', name: 'Carry Bag', category: 'PACKAGING', uom: 'pcs', rhythm: 'AS_NEEDED', cost: 2, reorder: 200, par: 1000, vendor: 'PACK-SR' },
+    { sku: 'PKG-CUP', name: 'Paper Chai Cup', category: 'PACKAGING', uom: 'pcs', rhythm: 'WEEKLY', cost: 1.2, reorder: 200, par: 1500, vendor: 'PACK-SR' },
+    { sku: 'GAS-19KG', name: 'LPG Commercial Cylinder 19kg', category: 'GAS', uom: 'cyl', rhythm: 'AS_NEEDED', cost: 1850, reorder: 1, par: 3, vendor: 'GAS-BH' },
+    { sku: 'CLEAN-DISH', name: 'Dishwash Liquid', category: 'CONSUMABLE', uom: 'L', rhythm: 'MONTHLY', cost: 90, reorder: 1, par: 5, vendor: 'KIRANA-SL' },
+  ];
+
+  const invIds: Record<string, string> = {};
+  for (const i of inv) {
+    const item = await prisma.inventoryItem.upsert({
+      where: { tenantId_sku: { tenantId: tenant.id, sku: i.sku } },
+      create: {
+        tenantId: tenant.id,
+        sku: i.sku,
+        name: i.name,
+        nameI18n: i.hi ? { hi: i.hi } : {},
+        category: i.category,
+        uomId: uoms[i.uom]!,
+        buyingRhythm: i.rhythm,
+        avgCostMinor: R(i.cost),
+        lastPurchaseCostMinor: R(i.cost),
+        shelfLifeDays: i.shelfLife,
+      },
+      update: { avgCostMinor: R(i.cost) },
+    });
+    invIds[i.sku] = item.id;
+
+    await prisma.branchInventoryItem.upsert({
+      where: { branchId_inventoryItemId: { branchId: branch.id, inventoryItemId: item.id } },
+      create: {
+        tenantId: tenant.id,
+        branchId: branch.id,
+        inventoryItemId: item.id,
+        reorderPointQty: i.reorder,
+        parLevelQty: i.par,
+        preferredVendorId: vendors[i.vendor],
+      },
+      update: { reorderPointQty: i.reorder, parLevelQty: i.par, preferredVendorId: vendors[i.vendor] },
+    });
+
+    await prisma.vendorItemPrice.createMany({
+      data: [{ tenantId: tenant.id, vendorId: vendors[i.vendor]!, inventoryItemId: item.id, priceMinor: R(i.cost) }],
+      skipDuplicates: true,
+    });
+  }
+  console.log(`stock   ${inv.length} inventory items with reorder points and preferred vendors`);
+
+  // ─── Recipes ──────────────────────────────────────────────────────────────
+  // Quantities are per serving. These drive automatic stock depletion and the live
+  // food-cost percentage — the single most valuable thing in the system once real.
+  const recipes: { item: string; variant: string; lines: [string, number, string, number?][] }[] = [
+    {
+      item: 'Veg Thali',
+      variant: 'Regular',
+      lines: [
+        ['RICE-SONA', 0.15, 'kg'],
+        ['DAL-TOOR', 0.05, 'kg'],
+        ['ATTA', 0.08, 'kg'],
+        ['POTATO', 0.1, 'kg', 15],
+        ['ONION', 0.05, 'kg', 10],
+        ['TOMATO', 0.04, 'kg', 8],
+        ['SAAG', 0.25, 'bundle', 20],
+        ['OIL-SUN', 0.015, 'L'],
+        ['SPICE-TUR', 0.002, 'kg'],
+        ['SPICE-CHI', 0.003, 'kg'],
+        ['SALT', 0.004, 'kg'],
+      ],
+    },
+    {
+      item: 'Veg Thali',
+      variant: 'Full',
+      lines: [
+        ['RICE-SONA', 0.2, 'kg'],
+        ['DAL-TOOR', 0.07, 'kg'],
+        ['ATTA', 0.12, 'kg'],
+        ['POTATO', 0.14, 'kg', 15],
+        ['ONION', 0.06, 'kg', 10],
+        ['TOMATO', 0.05, 'kg', 8],
+        ['SAAG', 0.3, 'bundle', 20],
+        ['CURD', 0.08, 'kg'],
+        ['OIL-SUN', 0.02, 'L'],
+        ['SPICE-TUR', 0.003, 'kg'],
+        ['SPICE-CHI', 0.004, 'kg'],
+        ['SALT', 0.005, 'kg'],
+      ],
+    },
+    {
+      item: 'Special Mithila Thali',
+      variant: 'Regular',
+      lines: [
+        ['RICE-SONA', 0.18, 'kg'],
+        ['DAL-TOOR', 0.06, 'kg'],
+        ['ATTA', 0.1, 'kg'],
+        ['POTATO', 0.15, 'kg', 15],
+        ['SAAG', 0.4, 'bundle', 20],
+        ['CURD', 0.1, 'kg'],
+        ['ONION', 0.05, 'kg', 10],
+        ['OIL-SUN', 0.018, 'L'],
+        ['SPICE-GAR', 0.002, 'kg'],
+        ['SALT', 0.005, 'kg'],
+        ['SUGAR', 0.02, 'kg'],
+      ],
+    },
+    {
+      item: 'Chicken Thali',
+      variant: 'Regular',
+      lines: [
+        ['RICE-SONA', 0.15, 'kg'],
+        ['DAL-TOOR', 0.04, 'kg'],
+        ['ATTA', 0.08, 'kg'],
+        ['CHICKEN', 0.18, 'kg', 8],
+        ['ONION', 0.08, 'kg', 10],
+        ['TOMATO', 0.06, 'kg', 8],
+        ['OIL-SUN', 0.025, 'L'],
+        ['SPICE-GAR', 0.003, 'kg'],
+        ['SPICE-CHI', 0.004, 'kg'],
+        ['SALT', 0.005, 'kg'],
+      ],
+    },
+    {
+      item: 'Litti Chokha',
+      variant: '2 pcs',
+      lines: [
+        ['ATTA', 0.1, 'kg'],
+        ['SATTU', 0.05, 'kg'],
+        ['BRINJAL', 0.12, 'kg', 20],
+        ['TOMATO', 0.06, 'kg', 8],
+        ['ONION', 0.03, 'kg', 10],
+        ['OIL-SUN', 0.01, 'L'],
+        ['SALT', 0.003, 'kg'],
+      ],
+    },
+    {
+      item: 'Masala Chai',
+      variant: 'Cutting',
+      lines: [
+        ['MILK', 0.06, 'L'],
+        ['TEA-DUST', 0.004, 'kg'],
+        ['SUGAR', 0.008, 'kg'],
+        ['PKG-CUP', 1, 'pcs'],
+      ],
+    },
+    {
+      item: 'Masala Chai',
+      variant: 'Full',
+      lines: [
+        ['MILK', 0.1, 'L'],
+        ['TEA-DUST', 0.006, 'kg'],
+        ['SUGAR', 0.012, 'kg'],
+        ['PKG-CUP', 1, 'pcs'],
+      ],
+    },
+    {
+      item: 'Veg Noodles',
+      variant: 'Full',
+      lines: [
+        ['NOODLES', 0.12, 'kg'],
+        ['CABBAGE', 0.06, 'kg', 15],
+        ['ONION', 0.04, 'kg', 10],
+        ['SOYA-SAUCE', 0.01, 'L'],
+        ['OIL-SUN', 0.02, 'L'],
+        ['SALT', 0.003, 'kg'],
+      ],
+    },
+    {
+      item: 'Veg Noodles',
+      variant: 'Half',
+      lines: [
+        ['NOODLES', 0.07, 'kg'],
+        ['CABBAGE', 0.04, 'kg', 15],
+        ['ONION', 0.025, 'kg', 10],
+        ['SOYA-SAUCE', 0.006, 'L'],
+        ['OIL-SUN', 0.012, 'L'],
+      ],
+    },
+    {
+      item: 'Gobi Manchurian',
+      variant: 'Plate',
+      lines: [
+        ['CAULI', 0.2, 'kg', 25],
+        ['ONION', 0.04, 'kg', 10],
+        ['ATTA', 0.03, 'kg'],
+        ['SOYA-SAUCE', 0.012, 'L'],
+        ['OIL-SUN', 0.05, 'L'],
+      ],
+    },
+  ];
+
+  let recipeCount = 0;
+  for (const r of recipes) {
+    const variantId = variantIds[`${r.item}|${r.variant}`];
+    if (!variantId) continue;
+    const menuItem = await prisma.menuItemVariant.findUniqueOrThrow({
+      where: { id: variantId },
+      select: { menuItemId: true },
+    });
+    const existing = await prisma.recipe.findFirst({
+      where: { menuItemId: menuItem.menuItemId, variantId, isActive: true },
+    });
+    if (existing) continue;
+
+    await prisma.recipe.create({
+      data: {
+        tenantId: tenant.id,
+        menuItemId: menuItem.menuItemId,
+        variantId,
+        yieldQty: 1,
+        lines: {
+          create: r.lines.map(([sku, qty, uom, wastage]) => ({
+            tenantId: tenant.id,
+            inventoryItemId: invIds[sku]!,
+            qty,
+            uomId: uoms[uom]!,
+            wastagePct: wastage ?? 0,
+          })),
+        },
+      },
+    });
+    recipeCount += 1;
+  }
+  console.log(`recipes ${recipeCount} costed dishes`);
+
+  // ─── Opening stock ────────────────────────────────────────────────────────
+  // So the POS is usable on day one and the variance report has a baseline.
+  for (const i of inv) {
+    const itemId = invIds[i.sku]!;
+    const already = await prisma.stockLedgerEntry.findFirst({
+      where: { branchId: branch.id, inventoryItemId: itemId, reason: 'OPENING_BALANCE' },
+    });
+    if (already) continue;
+    const qty = i.par * 0.6;
+    await prisma.stockLedgerEntry.create({
+      data: {
+        tenantId: tenant.id,
+        branchId: branch.id,
+        inventoryItemId: itemId,
+        qtyDelta: qty,
+        unitCostMinor: R(i.cost),
+        valueMinor: Math.round(qty * R(i.cost)),
+        reason: 'OPENING_BALANCE',
+        balanceAfterQty: qty,
+        note: 'Seeded opening stock',
+      },
+    });
+    await prisma.branchInventoryItem.update({
+      where: { branchId_inventoryItemId: { branchId: branch.id, inventoryItemId: itemId } },
+      data: { onHandQty: qty },
+    });
+  }
+
+  // ─── Shifts & staff ───────────────────────────────────────────────────────
+  const shifts: Record<string, string> = {};
+  for (const s of [
+    { name: 'Morning', startTime: '07:00', endTime: '15:00', breakMinutes: 30, fullDayMinutes: 450 },
+    { name: 'Evening', startTime: '15:00', endTime: '23:00', breakMinutes: 30, fullDayMinutes: 450 },
+    { name: 'Full Day', startTime: '08:00', endTime: '22:00', breakMinutes: 90, fullDayMinutes: 750 },
+  ]) {
+    const row = await prisma.shift.upsert({
+      where: { branchId_name: { branchId: branch.id, name: s.name } },
+      create: { tenantId: tenant.id, branchId: branch.id, ...s, graceMinutes: 15 },
+      update: {},
+    });
+    shifts[s.name] = row.id;
+  }
+
+  const staff = [
+    { code: 'E001', name: 'Head Chef', roleType: 'HEAD_CHEF' as const, monthly: 25000, shift: 'Full Day', userId: undefined },
+    { code: 'E002', name: 'Kitchen Helper 1', roleType: 'HELPER' as const, daily: 600, shift: 'Morning', userId: undefined },
+    { code: 'E003', name: 'Kitchen Helper 2', roleType: 'HELPER' as const, daily: 600, shift: 'Evening', userId: undefined },
+    { code: 'E004', name: 'Counter Staff', roleType: 'CASHIER' as const, monthly: 16000, shift: 'Full Day', userId: helperUser.id },
+    { code: 'E005', name: 'Branch Manager', roleType: 'MANAGER' as const, monthly: 30000, shift: 'Full Day', userId: manager.id },
+  ];
+
+  for (const s of staff) {
+    const employee = await prisma.employee.upsert({
+      where: { tenantId_employeeCode: { tenantId: tenant.id, employeeCode: s.code } },
+      create: {
+        tenantId: tenant.id,
+        branchId: branch.id,
+        userId: s.userId,
+        employeeCode: s.code,
+        name: s.name,
+        roleType: s.roleType,
+        employmentType: s.daily ? 'DAILY_WAGE' : 'FULL_TIME',
+        joinedOn: new Date('2026-10-01'),
+        weeklyOffDay: s.roleType === 'HELPER' ? 2 : null,
+      },
+      update: {},
+    });
+
+    const hasSalary = await prisma.salaryStructure.findFirst({ where: { employeeId: employee.id } });
+    if (!hasSalary) {
+      await prisma.salaryStructure.create({
+        data: {
+          tenantId: tenant.id,
+          employeeId: employee.id,
+          effectiveFrom: new Date('2026-10-01'),
+          basis: s.daily ? 'DAILY' : 'MONTHLY',
+          monthlyGrossMinor: s.monthly ? R(s.monthly) : null,
+          dailyRateMinor: s.daily ? R(s.daily) : null,
+          components: s.monthly ? { basic: R(s.monthly * 0.6), hra: R(s.monthly * 0.25), allowance: R(s.monthly * 0.15) } : {},
+          payDayOfMonth: 10,
+        },
+      });
+    }
+
+    const hasShift = await prisma.shiftAssignment.findFirst({ where: { employeeId: employee.id } });
+    if (!hasShift) {
+      await prisma.shiftAssignment.create({
+        data: {
+          tenantId: tenant.id,
+          employeeId: employee.id,
+          shiftId: shifts[s.shift]!,
+          effectiveFrom: new Date('2026-10-01'),
+        },
+      });
+    }
+  }
+  console.log(`staff   ${staff.length} employees with salary and shift`);
+
+  // ─── Expense categories ───────────────────────────────────────────────────
+  for (const c of [
+    { name: 'Rent', isFixed: true },
+    { name: 'Electricity', isFixed: false },
+    { name: 'Water', isFixed: false },
+    { name: 'Internet', isFixed: true },
+    { name: 'Gas', isFixed: false },
+    { name: 'Repairs & Maintenance', isFixed: false },
+    { name: 'Licences & Fees', isFixed: true },
+    { name: 'Marketing', isFixed: false },
+    { name: 'Transport', isFixed: false },
+  ]) {
+    await prisma.expenseCategory.upsert({
+      where: { tenantId_name: { tenantId: tenant.id, name: c.name } },
+      create: { tenantId: tenant.id, ...c },
+      update: {},
+    });
+  }
+
+  console.log(`
+Done.
+
+  Owner     ${OWNER_EMAIL} / ${OWNER_PASSWORD}
+  Manager   manager@mithilakitchen.in / Manager@12345
+  Counter   counter@mithilakitchen.in / Counter@12345
+
+  Change these before the shop opens. The legal-document vault starts empty on
+  purpose — upload the partnership deed, FSSAI and trade licence with their real
+  expiry dates so the renewal reminders have something to fire on.
+`);
+}
+
+function slugify(v: string): string {
+  return v.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(() => void prisma.$disconnect());

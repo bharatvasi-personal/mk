@@ -1,0 +1,1929 @@
+// MithilaKitchen — data model
+//
+// Conventions
+//  * Money is ALWAYS Int paise. Never Float, never Decimal-for-money. ₹120.50 == 12050.
+//  * Quantities are Decimal(14,4) — 2.5 kg, 0.125 L, 3 pcs.
+//  * Every tenant-owned table has `tenantId` and a matching Postgres RLS policy
+//    (see prisma/migrations/*_rls). Uniques are composite on tenantId so two tenants
+//    can both have an item called "Aloo Sabzi".
+//  * Financial and legal tables are append-only or immutable-once-final; corrections
+//    are new rows referencing the original.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["relationJoins"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// TENANCY, IDENTITY, ACCESS
+// ───────────────────────────────────────────────────────────────────────────
+
+/// The independent business. MithilaKitchen is tenant #1; the platform can host others.
+model Tenant {
+  id           String           @id @default(uuid()) @db.Uuid
+  slug         String           @unique
+  name         String
+  /// Legal entity details change when Partnership Firm -> LLP -> Pvt Ltd.
+  legalName    String?          @map("legal_name")
+  entityType   TenantEntityType @default(PARTNERSHIP_FIRM) @map("entity_type")
+  gstin        String?
+  pan          String?
+  fssaiNo      String?          @map("fssai_no")
+  currency     String           @default("INR")
+  timezone     String           @default("Asia/Kolkata")
+  locale       String           @default("en")
+  /// Financial year start month (India = April).
+  fyStartMonth Int              @default(4) @map("fy_start_month")
+  isActive     Boolean          @default(true) @map("is_active")
+  settings     Json             @default("{}")
+  createdAt    DateTime         @default(now()) @map("created_at")
+  updatedAt    DateTime         @updatedAt @map("updated_at")
+
+  branches          Branch[]
+  users             User[]
+  customers         Customer[]
+  menuCategories    MenuCategory[]
+  menuItems         MenuItem[]
+  orders            Order[]
+  inventoryItems    InventoryItem[]
+  vendors           Vendor[]
+  employees         Employee[]
+  legalDocuments    LegalDocument[]
+  auditLogs         AuditLog[]
+  uoms              Uom[]
+  expenseCategories ExpenseCategory[]
+
+  @@map("tenants")
+}
+
+enum TenantEntityType {
+  PROPRIETORSHIP
+  PARTNERSHIP_FIRM
+  LLP
+  PRIVATE_LIMITED
+}
+
+/// A physical outlet. Osman Nagar is branch #1. Everything operational hangs off a branch.
+model Branch {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  code            String
+  name            String
+  addressLine1    String    @map("address_line1")
+  addressLine2    String?   @map("address_line2")
+  city            String
+  state           String
+  pincode         String
+  lat             Float?
+  lng             Float?
+  phone           String?
+  /// Per-branch GSTIN — required once branches cross state lines.
+  gstin           String?
+  /// Geofence radius in metres for mobile attendance punch.
+  geofenceRadiusM Int       @default(100) @map("geofence_radius_m")
+  openingDate     DateTime? @map("opening_date")
+  isActive        Boolean   @default(true) @map("is_active")
+  /// Opening/closing time per meal slot, and weekly-off day.
+  operatingHours  Json      @default("{}") @map("operating_hours")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  branchMenuItems   BranchMenuItem[]
+  diningTables      DiningTable[]
+  orders            Order[]
+  invoiceSequences  InvoiceSequence[]
+  stockLedger       StockLedgerEntry[]
+  branchInventory   BranchInventoryItem[]
+  stockCounts       StockCount[]
+  purchaseOrders    PurchaseOrder[]
+  employees         Employee[]
+  shifts            Shift[]
+  attendanceEvents  AttendanceEvent[]
+  attendanceDays    AttendanceDay[]
+  attendanceDevices AttendanceDevice[]
+  userBranchRoles   UserBranchRole[]
+  cashSessions      CashSession[]
+  expenses          Expense[]
+  dailySummaries    DailySummary[]
+  payrollRuns       PayrollRun[]
+  legalDocuments    LegalDocument[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, isActive])
+  @@map("branches")
+}
+
+/// A login. Staff and partners; customers are a separate model on purpose
+/// (different auth rail, different lifecycle, different privacy posture).
+model User {
+  id               String    @id @default(uuid()) @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  name             String
+  email            String?
+  phone            String?
+  passwordHash     String?   @map("password_hash")
+  /// TOTP secret, encrypted at rest. Partners are expected to enable it.
+  totpSecret       String?   @map("totp_secret")
+  totpEnabled      Boolean   @default(false) @map("totp_enabled")
+  isActive         Boolean   @default(true) @map("is_active")
+  lastLoginAt      DateTime? @map("last_login_at")
+  failedLoginCount Int       @default(0) @map("failed_login_count")
+  lockedUntil      DateTime? @map("locked_until")
+  locale           String    @default("en")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchRoles   UserBranchRole[]
+  refreshTokens RefreshToken[]
+  employee      Employee?
+  auditLogs     AuditLog[]
+
+  @@unique([tenantId, email])
+  @@unique([tenantId, phone])
+  @@index([tenantId, isActive])
+  @@map("users")
+}
+
+/// Roles are granted per (user, branch). A tenant-wide grant uses branchId = null.
+model UserBranchRole {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  /// null = tenant-wide (OWNER, PARTNER, ACCOUNTANT).
+  branchId        String?  @map("branch_id") @db.Uuid
+  role            Role
+  grantedByUserId String?  @map("granted_by_user_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, branchId, role])
+  @@index([tenantId, userId])
+  @@map("user_branch_roles")
+}
+
+enum Role {
+  OWNER
+  PARTNER
+  MANAGER
+  CHEF
+  HELPER
+  ACCOUNTANT
+}
+
+/// Rotating refresh tokens. Reuse of a rotated token revokes the whole family.
+model RefreshToken {
+  id                  String     @id @default(uuid()) @db.Uuid
+  tenantId            String     @map("tenant_id") @db.Uuid
+  userId              String     @map("user_id") @db.Uuid
+  tokenHash           String     @unique @map("token_hash")
+  familyId            String     @map("family_id") @db.Uuid
+  client              ClientKind @default(WEB)
+  userAgent           String?    @map("user_agent")
+  ip                  String?
+  expiresAt           DateTime   @map("expires_at")
+  revokedAt           DateTime?  @map("revoked_at")
+  replacedByTokenHash String?    @map("replaced_by_token_hash")
+  createdAt           DateTime   @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, familyId])
+  @@map("refresh_tokens")
+}
+
+enum ClientKind {
+  WEB
+  POS
+  MOBILE
+  DEVICE
+}
+
+/// Customers authenticate by phone OTP. Deliberately minimal PII.
+model Customer {
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @map("tenant_id") @db.Uuid
+  phone              String
+  name               String?
+  email              String?
+  locale             String    @default("en")
+  /// Marketing consent — explicit, timestamped, revocable (DPDP Act 2023).
+  marketingConsentAt DateTime? @map("marketing_consent_at")
+  isBlocked          Boolean   @default(false) @map("is_blocked")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  addresses CustomerAddress[]
+  orders    Order[]
+
+  @@unique([tenantId, phone])
+  @@map("customers")
+}
+
+model CustomerAddress {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  customerId String   @map("customer_id") @db.Uuid
+  label      String?
+  line1      String
+  line2      String?
+  landmark   String?
+  pincode    String
+  lat        Float?
+  lng        Float?
+  isDefault  Boolean  @default(false) @map("is_default")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, customerId])
+  @@map("customer_addresses")
+}
+
+/// One-time codes for customer phone login. Hashed, short-lived, attempt-capped.
+model OtpChallenge {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  phone      String
+  codeHash   String    @map("code_hash")
+  purpose    String    @default("LOGIN")
+  attempts   Int       @default(0)
+  consumedAt DateTime? @map("consumed_at")
+  expiresAt  DateTime  @map("expires_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([tenantId, phone, createdAt])
+  @@map("otp_challenges")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// MENU
+// ───────────────────────────────────────────────────────────────────────────
+
+enum MealSlot {
+  LUNCH
+  CHAI
+  EVENING
+  ALL_DAY
+}
+
+enum FoodType {
+  VEG
+  NON_VEG
+  EGG
+  JAIN
+}
+
+model MenuCategory {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String
+  /// Localised display names: { "hi": "...", "te": "..." }
+  nameI18n  Json     @default("{}") @map("name_i18n")
+  slug      String
+  mealSlot  MealSlot @default(ALL_DAY) @map("meal_slot")
+  sortOrder Int      @default(0) @map("sort_order")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items  MenuItem[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId, mealSlot, isActive])
+  @@map("menu_categories")
+}
+
+/// The catalogue entry. Price lives on BranchMenuItem, not here — prices are per branch.
+model MenuItem {
+  id                String   @id @default(uuid()) @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  categoryId        String   @map("category_id") @db.Uuid
+  name              String
+  nameI18n          Json     @default("{}") @map("name_i18n")
+  slug              String
+  description       String?
+  descriptionI18n   Json     @default("{}") @map("description_i18n")
+  foodType          FoodType @default(VEG) @map("food_type")
+  /// Brand-defining flags used as badges on the public menu.
+  isLessOil         Boolean  @default(false) @map("is_less_oil")
+  isMithilaSpecial  Boolean  @default(false) @map("is_mithila_special")
+  isChefSpecial     Boolean  @default(false) @map("is_chef_special")
+  spiceLevel        Int?     @map("spice_level")
+  allergens         String[] @default([])
+  imageKey          String?  @map("image_key")
+  /// Target food-cost percentage. Recipe cost above this triggers an alert.
+  targetFoodCostPct Int?     @map("target_food_cost_pct")
+  isActive          Boolean  @default(true) @map("is_active")
+  sortOrder         Int      @default(0) @map("sort_order")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category        MenuCategory      @relation(fields: [categoryId], references: [id])
+  variants        MenuItemVariant[]
+  branchMenuItems BranchMenuItem[]
+  recipes         Recipe[]
+  orderItems      OrderItem[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId, categoryId, isActive])
+  @@map("menu_items")
+}
+
+/// Half/Full, Small/Large. Every item has at least one (a DEFAULT variant).
+model MenuItemVariant {
+  id         String  @id @default(uuid()) @db.Uuid
+  tenantId   String  @map("tenant_id") @db.Uuid
+  menuItemId String  @map("menu_item_id") @db.Uuid
+  name       String
+  nameI18n   Json    @default("{}") @map("name_i18n")
+  sortOrder  Int     @default(0) @map("sort_order")
+  isDefault  Boolean @default(false) @map("is_default")
+  isActive   Boolean @default(true) @map("is_active")
+
+  menuItem        MenuItem         @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  branchMenuItems BranchMenuItem[]
+  recipes         Recipe[]
+  orderItems      OrderItem[]
+
+  @@unique([menuItemId, name])
+  @@index([tenantId, menuItemId])
+  @@map("menu_item_variants")
+}
+
+/// Per-branch, per-meal-slot price and availability. This is the row the POS and
+/// the public menu actually read. Multi-branch pricing works because this row,
+/// not the catalogue item, owns the price.
+model BranchMenuItem {
+  id                  String    @id @default(uuid()) @db.Uuid
+  tenantId            String    @map("tenant_id") @db.Uuid
+  branchId            String    @map("branch_id") @db.Uuid
+  menuItemId          String    @map("menu_item_id") @db.Uuid
+  variantId           String    @map("variant_id") @db.Uuid
+  mealSlot            MealSlot  @map("meal_slot")
+  /// Paise, GST-inclusive (Indian restaurant menus quote inclusive prices).
+  priceMinor          Int       @map("price_minor")
+  /// Optional strike-through price for display.
+  compareAtPriceMinor Int?      @map("compare_at_price_minor")
+  /// GST rate in basis points. Restaurant service = 5% = 500.
+  gstRateBp           Int       @default(500) @map("gst_rate_bp")
+  isAvailable         Boolean   @default(true) @map("is_available")
+  /// Sold out for today only; cleared by the nightly job.
+  soldOutUntil        DateTime? @map("sold_out_until")
+  /// Optional daily cap (e.g. 60 thalis).
+  dailyLimit          Int?      @map("daily_limit")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  branch   Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  menuItem MenuItem        @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  variant  MenuItemVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, variantId, mealSlot])
+  @@index([tenantId, branchId, mealSlot, isAvailable])
+  @@map("branch_menu_items")
+}
+
+model DiningTable {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String  @map("tenant_id") @db.Uuid
+  branchId String  @map("branch_id") @db.Uuid
+  label    String
+  seats    Int     @default(4)
+  isActive Boolean @default(true) @map("is_active")
+
+  branch Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@unique([branchId, label])
+  @@map("dining_tables")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// ORDERS, BILLING, PAYMENTS
+// ───────────────────────────────────────────────────────────────────────────
+
+enum OrderChannel {
+  DINE_IN
+  TAKEAWAY
+  ONLINE_PICKUP
+  DELIVERY
+}
+
+enum OrderStatus {
+  DRAFT
+  PLACED
+  CONFIRMED
+  PREPARING
+  READY
+  SERVED
+  SETTLED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  REFUNDED
+  FAILED
+}
+
+model Order {
+  id            String        @id @default(uuid()) @db.Uuid
+  tenantId      String        @map("tenant_id") @db.Uuid
+  branchId      String        @map("branch_id") @db.Uuid
+  /// Human-readable per-branch per-day token: "15" on the KOT, shouted across the counter.
+  tokenNo       Int           @map("token_no")
+  /// Client-generated UUID so an offline POS retry is idempotent.
+  clientRef     String?       @map("client_ref")
+  channel       OrderChannel
+  status        OrderStatus   @default(DRAFT)
+  paymentStatus PaymentStatus @default(UNPAID) @map("payment_status")
+  mealSlot      MealSlot      @map("meal_slot")
+
+  tableId       String?   @map("table_id") @db.Uuid
+  customerId    String?   @map("customer_id") @db.Uuid
+  customerName  String?   @map("customer_name")
+  customerPhone String?   @map("customer_phone")
+  /// For ONLINE_PICKUP: when the customer said they would collect.
+  pickupAt      DateTime? @map("pickup_at")
+  guestCount    Int?      @map("guest_count")
+  notes         String?
+
+  // Money, all paise. Stored rather than recomputed so a historical bill never changes
+  // when a price or tax rate changes later.
+  subtotalMinor  Int @default(0) @map("subtotal_minor")
+  discountMinor  Int @default(0) @map("discount_minor")
+  packagingMinor Int @default(0) @map("packaging_minor")
+  deliveryMinor  Int @default(0) @map("delivery_minor")
+  /// CGST + SGST. Menu prices are GST-inclusive, so this is the extracted tax component.
+  taxMinor       Int @default(0) @map("tax_minor")
+  roundOffMinor  Int @default(0) @map("round_off_minor")
+  totalMinor     Int @default(0) @map("total_minor")
+  paidMinor      Int @default(0) @map("paid_minor")
+  /// Recipe-derived cost of goods at the moment of sale. Makes food-cost % a stored fact.
+  costMinor      Int @default(0) @map("cost_minor")
+
+  placedAt     DateTime? @map("placed_at")
+  settledAt    DateTime? @map("settled_at")
+  cancelledAt  DateTime? @map("cancelled_at")
+  cancelReason String?   @map("cancel_reason")
+
+  createdByUserId String? @map("created_by_user_id") @db.Uuid
+  cashSessionId   String? @map("cash_session_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch      Branch       @relation(fields: [branchId], references: [id])
+  table       DiningTable? @relation(fields: [tableId], references: [id])
+  customer    Customer?    @relation(fields: [customerId], references: [id])
+  cashSession CashSession? @relation(fields: [cashSessionId], references: [id])
+
+  items          OrderItem[]
+  payments       Payment[]
+  statusEvents   OrderStatusEvent[]
+  invoice        Invoice?
+  kitchenTickets KitchenTicket[]
+  creditNotes    CreditNote[]
+  stockLedger    StockLedgerEntry[]
+
+  @@unique([branchId, clientRef])
+  @@index([tenantId, branchId, createdAt])
+  @@index([tenantId, branchId, status])
+  @@index([tenantId, customerId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                String   @id @default(uuid()) @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  orderId           String   @map("order_id") @db.Uuid
+  menuItemId        String   @map("menu_item_id") @db.Uuid
+  variantId         String   @map("variant_id") @db.Uuid
+  /// Denormalised so a reprinted bill from last year still reads correctly.
+  nameSnapshot      String   @map("name_snapshot")
+  variantSnapshot   String   @map("variant_snapshot")
+  qty               Int
+  unitPriceMinor    Int      @map("unit_price_minor")
+  gstRateBp         Int      @map("gst_rate_bp")
+  lineSubtotalMinor Int      @map("line_subtotal_minor")
+  lineDiscountMinor Int      @default(0) @map("line_discount_minor")
+  lineTaxMinor      Int      @default(0) @map("line_tax_minor")
+  lineTotalMinor    Int      @map("line_total_minor")
+  /// Recipe cost for this line at time of sale.
+  lineCostMinor     Int      @default(0) @map("line_cost_minor")
+  notes             String?
+  /// Cancelled after the KOT printed — kitchen already used the ingredients.
+  isVoided          Boolean  @default(false) @map("is_voided")
+  voidReason        String?  @map("void_reason")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  order       Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem    MenuItem            @relation(fields: [menuItemId], references: [id])
+  variant     MenuItemVariant     @relation(fields: [variantId], references: [id])
+  ticketItems KitchenTicketItem[]
+
+  @@index([tenantId, orderId])
+  @@index([tenantId, menuItemId])
+  @@map("order_items")
+}
+
+/// Append-only status history. Answers "why did this order take 40 minutes".
+model OrderStatusEvent {
+  id         String       @id @default(uuid()) @db.Uuid
+  tenantId   String       @map("tenant_id") @db.Uuid
+  orderId    String       @map("order_id") @db.Uuid
+  fromStatus OrderStatus? @map("from_status")
+  toStatus   OrderStatus  @map("to_status")
+  byUserId   String?      @map("by_user_id") @db.Uuid
+  note       String?
+  createdAt  DateTime     @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, orderId, createdAt])
+  @@map("order_status_events")
+}
+
+/// Kitchen Order Ticket — printed at confirm, separate from the customer bill.
+/// The Chinese counter and the thali kitchen get their own ticket streams.
+model KitchenTicket {
+  id             String         @id @default(uuid()) @db.Uuid
+  tenantId       String         @map("tenant_id") @db.Uuid
+  orderId        String         @map("order_id") @db.Uuid
+  station        KitchenStation @default(MAIN)
+  ticketNo       Int            @map("ticket_no")
+  printedAt      DateTime?      @map("printed_at")
+  acknowledgedAt DateTime?      @map("acknowledged_at")
+  readyAt        DateTime?      @map("ready_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  order Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  items KitchenTicketItem[]
+
+  @@index([tenantId, orderId])
+  @@map("kitchen_tickets")
+}
+
+enum KitchenStation {
+  MAIN
+  CHINESE
+  CHAI
+  TANDOOR
+}
+
+model KitchenTicketItem {
+  id          String  @id @default(uuid()) @db.Uuid
+  tenantId    String  @map("tenant_id") @db.Uuid
+  ticketId    String  @map("ticket_id") @db.Uuid
+  orderItemId String  @map("order_item_id") @db.Uuid
+  qty         Int
+  notes       String?
+
+  ticket    KitchenTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  orderItem OrderItem     @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, ticketId])
+  @@map("kitchen_ticket_items")
+}
+
+enum TenderType {
+  CASH
+  /// Static shop QR — zero MDR, UTR captured manually. The dominant walk-in rail.
+  UPI_MANUAL
+  /// Through the payment gateway (online orders).
+  UPI_GATEWAY
+  CARD
+  WALLET
+  /// Staff meal, owner's family, spoilage write-off.
+  COMPLIMENTARY
+  CREDIT
+}
+
+model Payment {
+  id               String        @id @default(uuid()) @db.Uuid
+  tenantId         String        @map("tenant_id") @db.Uuid
+  orderId          String        @map("order_id") @db.Uuid
+  tender           TenderType
+  amountMinor      Int           @map("amount_minor")
+  /// Cash received, to compute change. Cash tenders only.
+  tenderedMinor    Int?          @map("tendered_minor")
+  changeMinor      Int?          @map("change_minor")
+  /// UPI UTR / card auth code / gateway payment id.
+  reference        String?
+  status           PaymentStatus @default(PAID)
+  gatewayProvider  String?       @map("gateway_provider")
+  gatewayOrderId   String?       @map("gateway_order_id")
+  gatewayPaymentId String?       @map("gateway_payment_id")
+  gatewaySignature String?       @map("gateway_signature")
+  /// Verbatim webhook body, kept for reconciliation disputes.
+  gatewayPayload   Json?         @map("gateway_payload")
+  receivedByUserId String?       @map("received_by_user_id") @db.Uuid
+  receivedAt       DateTime      @default(now()) @map("received_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  refunds Refund[]
+
+  @@unique([gatewayProvider, gatewayPaymentId])
+  @@index([tenantId, orderId])
+  @@index([tenantId, tender, receivedAt])
+  @@map("payments")
+}
+
+model Refund {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  paymentId        String   @map("payment_id") @db.Uuid
+  amountMinor      Int      @map("amount_minor")
+  reason           String
+  gatewayRefundId  String?  @map("gateway_refund_id")
+  status           String   @default("PENDING")
+  approvedByUserId String?  @map("approved_by_user_id") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, paymentId])
+  @@map("refunds")
+}
+
+/// Gapless, per-branch, per-financial-year invoice numbering. The counter is
+/// incremented with SELECT ... FOR UPDATE inside the settle transaction, which is
+/// what makes the sequence legally gapless (a Postgres sequence is not — it leaks on rollback).
+model InvoiceSequence {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  branchId   String   @map("branch_id") @db.Uuid
+  /// "2026-27"
+  fy         String
+  prefix     String
+  lastNumber Int      @default(0) @map("last_number")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, fy])
+  @@map("invoice_sequences")
+}
+
+/// Immutable once created. A correction is a CreditNote, never an edit.
+model Invoice {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  orderId        String   @unique @map("order_id") @db.Uuid
+  invoiceNo      String   @map("invoice_no")
+  fy             String
+  issuedAt       DateTime @default(now()) @map("issued_at")
+  /// Frozen copy of the seller's legal details as of issue date.
+  sellerSnapshot Json     @map("seller_snapshot")
+  buyerName      String?  @map("buyer_name")
+  buyerPhone     String?  @map("buyer_phone")
+  buyerGstin     String?  @map("buyer_gstin")
+  subtotalMinor  Int      @map("subtotal_minor")
+  discountMinor  Int      @map("discount_minor")
+  cgstMinor      Int      @map("cgst_minor")
+  sgstMinor      Int      @map("sgst_minor")
+  igstMinor      Int      @default(0) @map("igst_minor")
+  roundOffMinor  Int      @map("round_off_minor")
+  totalMinor     Int      @map("total_minor")
+  /// Per-HSN tax breakup for GST returns.
+  taxBreakup     Json     @default("[]") @map("tax_breakup")
+  pdfKey         String?  @map("pdf_key")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  order       Order        @relation(fields: [orderId], references: [id])
+  creditNotes CreditNote[]
+
+  @@unique([tenantId, invoiceNo])
+  @@index([tenantId, issuedAt])
+  @@map("invoices")
+}
+
+model CreditNote {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  invoiceId      String   @map("invoice_id") @db.Uuid
+  orderId        String   @map("order_id") @db.Uuid
+  noteNo         String   @map("note_no")
+  reason         String
+  amountMinor    Int      @map("amount_minor")
+  issuedByUserId String?  @map("issued_by_user_id") @db.Uuid
+  issuedAt       DateTime @default(now()) @map("issued_at")
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  order   Order   @relation(fields: [orderId], references: [id])
+
+  @@unique([tenantId, noteNo])
+  @@map("credit_notes")
+}
+
+/// A cash drawer shift. Open with a float, close with a counted amount; the
+/// difference is the variance that surfaces theft and till errors (module 4).
+model CashSession {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  branchId          String    @map("branch_id") @db.Uuid
+  openedByUserId    String    @map("opened_by_user_id") @db.Uuid
+  closedByUserId    String?   @map("closed_by_user_id") @db.Uuid
+  openingFloatMinor Int       @map("opening_float_minor")
+  /// Computed at close: float + cash sales - cash refunds - payouts.
+  expectedCashMinor Int?      @map("expected_cash_minor")
+  countedCashMinor  Int?      @map("counted_cash_minor")
+  varianceMinor     Int?      @map("variance_minor")
+  /// Denominations counted, for a real cash-up: { "500": 4, "200": 3, ... }
+  denominationCount Json?     @map("denomination_count")
+  notes             String?
+  openedAt          DateTime  @default(now()) @map("opened_at")
+  closedAt          DateTime? @map("closed_at")
+
+  branch Branch  @relation(fields: [branchId], references: [id])
+  orders Order[]
+
+  @@index([tenantId, branchId, openedAt])
+  @@map("cash_sessions")
+}
+
+/// Stored first-response for an Idempotency-Key. Makes blind offline retries safe.
+model IdempotencyRecord {
+  key          String   @id
+  tenantId     String   @map("tenant_id") @db.Uuid
+  endpoint     String
+  requestHash  String   @map("request_hash")
+  statusCode   Int      @map("status_code")
+  responseBody Json     @map("response_body")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("idempotency_records")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// INVENTORY  &  RECIPES
+// ───────────────────────────────────────────────────────────────────────────
+
+model Uom {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  code         String
+  name         String
+  /// Base unit for conversion, e.g. g for kg with factor 1000.
+  baseCode     String?  @map("base_code")
+  factorToBase Decimal? @map("factor_to_base") @db.Decimal(14, 6)
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  inventoryItems InventoryItem[]
+  recipeLines    RecipeLine[]
+
+  @@unique([tenantId, code])
+  @@map("uoms")
+}
+
+enum InventoryCategory {
+  PERISHABLE
+  STAPLE
+  SPICE
+  DAIRY
+  PACKAGING
+  GAS
+  BEVERAGE
+  CONSUMABLE
+  OTHER
+}
+
+/// Buying rhythm drives the purchase worklist: daily-fresh vegetables are a
+/// different workflow from monthly spices, and pretending otherwise is why
+/// generic inventory software gets abandoned in kitchens.
+enum BuyingRhythm {
+  DAILY
+  WEEKLY
+  FORTNIGHTLY
+  MONTHLY
+  AS_NEEDED
+}
+
+model InventoryItem {
+  id                    String            @id @default(uuid()) @db.Uuid
+  tenantId              String            @map("tenant_id") @db.Uuid
+  sku                   String
+  name                  String
+  nameI18n              Json              @default("{}") @map("name_i18n")
+  category              InventoryCategory
+  uomId                 String            @map("uom_id") @db.Uuid
+  buyingRhythm          BuyingRhythm      @default(WEEKLY) @map("buying_rhythm")
+  /// Weighted-average cost per UoM in paise. Recomputed on every receipt.
+  avgCostMinor          Int               @default(0) @map("avg_cost_minor")
+  lastPurchaseCostMinor Int?              @map("last_purchase_cost_minor")
+  /// Perishables get a shelf life so the wastage report can nag.
+  shelfLifeDays         Int?              @map("shelf_life_days")
+  isTracked             Boolean           @default(true) @map("is_tracked")
+  isActive              Boolean           @default(true) @map("is_active")
+  notes                 String?
+  createdAt             DateTime          @default(now()) @map("created_at")
+  updatedAt             DateTime          @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uom    Uom    @relation(fields: [uomId], references: [id])
+
+  branchItems   BranchInventoryItem[]
+  ledgerEntries StockLedgerEntry[]
+  recipeLines   RecipeLine[]
+  vendorPrices  VendorItemPrice[]
+  poLines       PurchaseOrderLine[]
+  receiptLines  GoodsReceiptLine[]
+  countLines    StockCountLine[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId, category, isActive])
+  @@map("inventory_items")
+}
+
+/// Per-branch stock policy and a cached on-hand snapshot.
+/// `onHandQty` is a *cache* of the ledger sum, refreshed in the same transaction
+/// as the ledger write. The ledger is the truth.
+model BranchInventoryItem {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  branchId          String    @map("branch_id") @db.Uuid
+  inventoryItemId   String    @map("inventory_item_id") @db.Uuid
+  onHandQty         Decimal   @default(0) @map("on_hand_qty") @db.Decimal(14, 4)
+  /// Order more when on-hand drops below this.
+  reorderPointQty   Decimal   @default(0) @map("reorder_point_qty") @db.Decimal(14, 4)
+  /// Top up to this when ordering.
+  parLevelQty       Decimal   @default(0) @map("par_level_qty") @db.Decimal(14, 4)
+  preferredVendorId String?   @map("preferred_vendor_id") @db.Uuid
+  storageLocation   String?   @map("storage_location")
+  lastCountedAt     DateTime? @map("last_counted_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  branch          Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  item            InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  preferredVendor Vendor?       @relation(fields: [preferredVendorId], references: [id])
+
+  @@unique([branchId, inventoryItemId])
+  @@index([tenantId, branchId])
+  @@map("branch_inventory_items")
+}
+
+enum StockMovementReason {
+  PURCHASE_RECEIPT
+  SALE_CONSUMPTION
+  WASTAGE
+  SPOILAGE
+  STAFF_MEAL
+  COUNT_ADJUSTMENT
+  TRANSFER_OUT
+  TRANSFER_IN
+  OPENING_BALANCE
+  PURCHASE_RETURN
+  PRODUCTION_INPUT
+  PRODUCTION_OUTPUT
+}
+
+/// Append-only. Never updated, never deleted. On-hand = SUM(qtyDelta).
+/// This is the spine of module 4: bought vs used vs counted all live here,
+/// distinguished only by `reason`.
+model StockLedgerEntry {
+  id              String              @id @default(uuid()) @db.Uuid
+  tenantId        String              @map("tenant_id") @db.Uuid
+  branchId        String              @map("branch_id") @db.Uuid
+  inventoryItemId String              @map("inventory_item_id") @db.Uuid
+  /// Signed: +2.5 received, -0.180 consumed.
+  qtyDelta        Decimal             @map("qty_delta") @db.Decimal(14, 4)
+  /// Unit cost at the moment of movement, paise.
+  unitCostMinor   Int                 @default(0) @map("unit_cost_minor")
+  valueMinor      Int                 @default(0) @map("value_minor")
+  reason          StockMovementReason
+  /// Running balance after this entry — makes "stock as of date" a lookup, not a sum.
+  balanceAfterQty Decimal             @map("balance_after_qty") @db.Decimal(14, 4)
+
+  orderId        String?  @map("order_id") @db.Uuid
+  goodsReceiptId String?  @map("goods_receipt_id") @db.Uuid
+  stockCountId   String?  @map("stock_count_id") @db.Uuid
+  transferId     String?  @map("transfer_id") @db.Uuid
+  byUserId       String?  @map("by_user_id") @db.Uuid
+  note           String?
+  occurredAt     DateTime @default(now()) @map("occurred_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  branch       Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  item         InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  order        Order?        @relation(fields: [orderId], references: [id])
+  goodsReceipt GoodsReceipt? @relation(fields: [goodsReceiptId], references: [id])
+  stockCount   StockCount?   @relation(fields: [stockCountId], references: [id])
+
+  @@index([tenantId, branchId, inventoryItemId, occurredAt])
+  @@index([tenantId, branchId, reason, occurredAt])
+  @@map("stock_ledger_entries")
+}
+
+/// Bill of materials for a menu item/variant. Drives automatic consumption on
+/// sale and the live food-cost percentage.
+model Recipe {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  menuItemId String   @map("menu_item_id") @db.Uuid
+  /// null = applies to all variants.
+  variantId  String?  @map("variant_id") @db.Uuid
+  /// How many servings the quantities below produce.
+  yieldQty   Decimal  @default(1) @map("yield_qty") @db.Decimal(14, 4)
+  version    Int      @default(1)
+  isActive   Boolean  @default(true) @map("is_active")
+  notes      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  menuItem MenuItem         @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  variant  MenuItemVariant? @relation(fields: [variantId], references: [id])
+  lines    RecipeLine[]
+
+  @@unique([menuItemId, variantId, version])
+  @@index([tenantId, menuItemId, isActive])
+  @@map("recipes")
+}
+
+model RecipeLine {
+  id              String  @id @default(uuid()) @db.Uuid
+  tenantId        String  @map("tenant_id") @db.Uuid
+  recipeId        String  @map("recipe_id") @db.Uuid
+  inventoryItemId String  @map("inventory_item_id") @db.Uuid
+  qty             Decimal @db.Decimal(14, 4)
+  uomId           String  @map("uom_id") @db.Uuid
+  /// Expected loss in peeling/cooking, as a percentage. Cost uses qty * (1 + wastagePct/100).
+  wastagePct      Int     @default(0) @map("wastage_pct")
+  isOptional      Boolean @default(false) @map("is_optional")
+
+  recipe Recipe        @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  item   InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  uom    Uom           @relation(fields: [uomId], references: [id])
+
+  @@unique([recipeId, inventoryItemId])
+  @@index([tenantId, recipeId])
+  @@map("recipe_lines")
+}
+
+enum StockCountStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  CANCELLED
+}
+
+/// Physical stock take. Comparing this against the ledger is the variance report.
+model StockCount {
+  id                 String           @id @default(uuid()) @db.Uuid
+  tenantId           String           @map("tenant_id") @db.Uuid
+  branchId           String           @map("branch_id") @db.Uuid
+  reference          String
+  countedOn          DateTime         @map("counted_on")
+  status             StockCountStatus @default(DRAFT)
+  scope              String? // "PERISHABLE", "FULL", free text
+  countedByUserId    String?          @map("counted_by_user_id") @db.Uuid
+  approvedByUserId   String?          @map("approved_by_user_id") @db.Uuid
+  approvedAt         DateTime?        @map("approved_at")
+  /// Total value of the adjustment, paise. Negative = shrinkage.
+  varianceValueMinor Int              @default(0) @map("variance_value_minor")
+  notes              String?
+  createdAt          DateTime         @default(now()) @map("created_at")
+
+  branch        Branch             @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  lines         StockCountLine[]
+  ledgerEntries StockLedgerEntry[]
+
+  @@unique([branchId, reference])
+  @@index([tenantId, branchId, countedOn])
+  @@map("stock_counts")
+}
+
+model StockCountLine {
+  id                 String  @id @default(uuid()) @db.Uuid
+  tenantId           String  @map("tenant_id") @db.Uuid
+  stockCountId       String  @map("stock_count_id") @db.Uuid
+  inventoryItemId    String  @map("inventory_item_id") @db.Uuid
+  /// Ledger balance at the moment of counting, frozen.
+  systemQty          Decimal @map("system_qty") @db.Decimal(14, 4)
+  countedQty         Decimal @map("counted_qty") @db.Decimal(14, 4)
+  varianceQty        Decimal @map("variance_qty") @db.Decimal(14, 4)
+  varianceValueMinor Int     @default(0) @map("variance_value_minor")
+  reason             String?
+
+  stockCount StockCount    @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  item       InventoryItem @relation(fields: [inventoryItemId], references: [id])
+
+  @@unique([stockCountId, inventoryItemId])
+  @@index([tenantId, stockCountId])
+  @@map("stock_count_lines")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// VENDORS  &  PURCHASING
+// ───────────────────────────────────────────────────────────────────────────
+
+model Vendor {
+  id                   String   @id @default(uuid()) @db.Uuid
+  tenantId             String   @map("tenant_id") @db.Uuid
+  code                 String
+  name                 String
+  contactName          String?  @map("contact_name")
+  phone                String?
+  altPhone             String?  @map("alt_phone")
+  email                String?
+  addressLine1         String?  @map("address_line1")
+  city                 String?
+  pincode              String?
+  gstin                String?
+  pan                  String?
+  category             String?
+  /// Local suppliers commonly extend 7–15 days. 0 = cash on delivery.
+  creditDays           Int      @default(0) @map("credit_days")
+  creditLimitMinor     Int?     @map("credit_limit_minor")
+  paymentTerms         String?  @map("payment_terms")
+  bankAccountName      String?  @map("bank_account_name")
+  bankAccountNumberEnc String?  @map("bank_account_number_enc")
+  bankIfsc             String?  @map("bank_ifsc")
+  upiId                String?  @map("upi_id")
+  rating               Int?
+  isActive             Boolean  @default(true) @map("is_active")
+  notes                String?
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  tenant            Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  itemPrices        VendorItemPrice[]
+  purchaseOrders    PurchaseOrder[]
+  invoices          VendorInvoice[]
+  payments          VendorPayment[]
+  preferredForItems BranchInventoryItem[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, isActive])
+  @@map("vendors")
+}
+
+/// Price list with validity windows, so "who was cheapest for onions in October"
+/// is answerable.
+model VendorItemPrice {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  vendorId        String    @map("vendor_id") @db.Uuid
+  inventoryItemId String    @map("inventory_item_id") @db.Uuid
+  priceMinor      Int       @map("price_minor")
+  minOrderQty     Decimal?  @map("min_order_qty") @db.Decimal(14, 4)
+  validFrom       DateTime  @default(now()) @map("valid_from")
+  validTo         DateTime? @map("valid_to")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  vendor Vendor        @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  item   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, vendorId, inventoryItemId, validFrom])
+  @@map("vendor_item_prices")
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  SENT
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+  CLOSED
+}
+
+model PurchaseOrder {
+  id               String              @id @default(uuid()) @db.Uuid
+  tenantId         String              @map("tenant_id") @db.Uuid
+  branchId         String              @map("branch_id") @db.Uuid
+  vendorId         String              @map("vendor_id") @db.Uuid
+  poNumber         String              @map("po_number")
+  status           PurchaseOrderStatus @default(DRAFT)
+  expectedOn       DateTime?           @map("expected_on")
+  subtotalMinor    Int                 @default(0) @map("subtotal_minor")
+  taxMinor         Int                 @default(0) @map("tax_minor")
+  totalMinor       Int                 @default(0) @map("total_minor")
+  raisedByUserId   String?             @map("raised_by_user_id") @db.Uuid
+  approvedByUserId String?             @map("approved_by_user_id") @db.Uuid
+  approvedAt       DateTime?           @map("approved_at")
+  notes            String?
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+
+  branch   Branch              @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  vendor   Vendor              @relation(fields: [vendorId], references: [id])
+  lines    PurchaseOrderLine[]
+  receipts GoodsReceipt[]
+  invoices VendorInvoice[]
+
+  @@unique([tenantId, poNumber])
+  @@index([tenantId, branchId, status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderLine {
+  id              String  @id @default(uuid()) @db.Uuid
+  tenantId        String  @map("tenant_id") @db.Uuid
+  purchaseOrderId String  @map("purchase_order_id") @db.Uuid
+  inventoryItemId String  @map("inventory_item_id") @db.Uuid
+  orderedQty      Decimal @map("ordered_qty") @db.Decimal(14, 4)
+  receivedQty     Decimal @default(0) @map("received_qty") @db.Decimal(14, 4)
+  unitPriceMinor  Int     @map("unit_price_minor")
+  gstRateBp       Int     @default(0) @map("gst_rate_bp")
+  lineTotalMinor  Int     @map("line_total_minor")
+
+  purchaseOrder PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  item          InventoryItem      @relation(fields: [inventoryItemId], references: [id])
+  receiptLines  GoodsReceiptLine[]
+
+  @@unique([purchaseOrderId, inventoryItemId])
+  @@index([tenantId, purchaseOrderId])
+  @@map("purchase_order_lines")
+}
+
+/// Goods actually arriving. Partial, over- and under-delivery are the norm at a
+/// mandi, so the receipt is a separate document from the PO rather than a PO status.
+model GoodsReceipt {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  branchId         String   @map("branch_id") @db.Uuid
+  purchaseOrderId  String?  @map("purchase_order_id") @db.Uuid
+  vendorInvoiceId  String?  @map("vendor_invoice_id") @db.Uuid
+  reference        String
+  receivedOn       DateTime @default(now()) @map("received_on")
+  receivedByUserId String?  @map("received_by_user_id") @db.Uuid
+  /// Photo of the paper bill the vendor handed over.
+  billPhotoKey     String?  @map("bill_photo_key")
+  totalMinor       Int      @default(0) @map("total_minor")
+  notes            String?
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  purchaseOrder PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
+  lines         GoodsReceiptLine[]
+  ledgerEntries StockLedgerEntry[]
+
+  @@unique([tenantId, reference])
+  @@index([tenantId, branchId, receivedOn])
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptLine {
+  id                  String    @id @default(uuid()) @db.Uuid
+  tenantId            String    @map("tenant_id") @db.Uuid
+  goodsReceiptId      String    @map("goods_receipt_id") @db.Uuid
+  purchaseOrderLineId String?   @map("purchase_order_line_id") @db.Uuid
+  inventoryItemId     String    @map("inventory_item_id") @db.Uuid
+  receivedQty         Decimal   @map("received_qty") @db.Decimal(14, 4)
+  rejectedQty         Decimal   @default(0) @map("rejected_qty") @db.Decimal(14, 4)
+  unitPriceMinor      Int       @map("unit_price_minor")
+  lineTotalMinor      Int       @map("line_total_minor")
+  batchNo             String?   @map("batch_no")
+  expiryOn            DateTime? @map("expiry_on")
+
+  goodsReceipt GoodsReceipt       @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  poLine       PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id])
+  item         InventoryItem      @relation(fields: [inventoryItemId], references: [id])
+
+  @@index([tenantId, goodsReceiptId])
+  @@map("goods_receipt_lines")
+}
+
+enum VendorInvoiceStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  DISPUTED
+  CANCELLED
+}
+
+/// What you owe. `dueOn` = invoiceDate + vendor.creditDays, which is what powers
+/// the "who do I owe this week" screen.
+model VendorInvoice {
+  id              String              @id @default(uuid()) @db.Uuid
+  tenantId        String              @map("tenant_id") @db.Uuid
+  vendorId        String              @map("vendor_id") @db.Uuid
+  purchaseOrderId String?             @map("purchase_order_id") @db.Uuid
+  /// The vendor's own bill number.
+  billNo          String              @map("bill_no")
+  billDate        DateTime            @map("bill_date")
+  dueOn           DateTime            @map("due_on")
+  subtotalMinor   Int                 @map("subtotal_minor")
+  taxMinor        Int                 @default(0) @map("tax_minor")
+  totalMinor      Int                 @map("total_minor")
+  paidMinor       Int                 @default(0) @map("paid_minor")
+  status          VendorInvoiceStatus @default(UNPAID)
+  billFileKey     String?             @map("bill_file_key")
+  notes           String?
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+
+  vendor        Vendor                    @relation(fields: [vendorId], references: [id])
+  purchaseOrder PurchaseOrder?            @relation(fields: [purchaseOrderId], references: [id])
+  payments      VendorPaymentAllocation[]
+
+  @@unique([tenantId, vendorId, billNo])
+  @@index([tenantId, status, dueOn])
+  @@map("vendor_invoices")
+}
+
+model VendorPayment {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  vendorId     String   @map("vendor_id") @db.Uuid
+  amountMinor  Int      @map("amount_minor")
+  method       String // CASH, UPI, NEFT, CHEQUE
+  reference    String?
+  paidOn       DateTime @default(now()) @map("paid_on")
+  paidByUserId String?  @map("paid_by_user_id") @db.Uuid
+  notes        String?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  vendor      Vendor                    @relation(fields: [vendorId], references: [id])
+  allocations VendorPaymentAllocation[]
+
+  @@index([tenantId, vendorId, paidOn])
+  @@map("vendor_payments")
+}
+
+/// One payment can settle several bills; one bill can take several payments.
+model VendorPaymentAllocation {
+  id              String @id @default(uuid()) @db.Uuid
+  tenantId        String @map("tenant_id") @db.Uuid
+  vendorPaymentId String @map("vendor_payment_id") @db.Uuid
+  vendorInvoiceId String @map("vendor_invoice_id") @db.Uuid
+  amountMinor     Int    @map("amount_minor")
+
+  payment VendorPayment @relation(fields: [vendorPaymentId], references: [id], onDelete: Cascade)
+  invoice VendorInvoice @relation(fields: [vendorInvoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([vendorPaymentId, vendorInvoiceId])
+  @@map("vendor_payment_allocations")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// EMPLOYEES, ATTENDANCE, PAYROLL
+// ───────────────────────────────────────────────────────────────────────────
+
+enum EmployeeRoleType {
+  PARTNER
+  MANAGER
+  HEAD_CHEF
+  CHEF
+  HELPER
+  CLEANER
+  CASHIER
+  DELIVERY
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  DAILY_WAGE
+  CONTRACT
+}
+
+model Employee {
+  id                    String           @id @default(uuid()) @db.Uuid
+  tenantId              String           @map("tenant_id") @db.Uuid
+  branchId              String           @map("branch_id") @db.Uuid
+  /// Set only if this employee also logs in. Helpers often will not.
+  userId                String?          @unique @map("user_id") @db.Uuid
+  employeeCode          String           @map("employee_code")
+  name                  String
+  phone                 String?
+  altPhone              String?          @map("alt_phone")
+  /// Address and emergency contact — a real need when staff live nearby and shifts run late.
+  addressLine1          String?          @map("address_line1")
+  emergencyContactName  String?          @map("emergency_contact_name")
+  emergencyContactPhone String?          @map("emergency_contact_phone")
+  dateOfBirth           DateTime?        @map("date_of_birth")
+  roleType              EmployeeRoleType @map("role_type")
+  employmentType        EmploymentType   @default(FULL_TIME) @map("employment_type")
+  joinedOn              DateTime         @map("joined_on")
+  exitedOn              DateTime?        @map("exited_on")
+  /// No Aadhaar number by design — see docs/ATTENDANCE-RESEARCH.md.
+  idProofType           String?          @map("id_proof_type")
+  idProofLast4          String?          @map("id_proof_last4")
+  photoKey              String?          @map("photo_key")
+  /// Weekly off, 0 = Sunday.
+  weeklyOffDay          Int?             @map("weekly_off_day")
+  isActive              Boolean          @default(true) @map("is_active")
+  notes                 String?
+  createdAt             DateTime         @default(now()) @map("created_at")
+  updatedAt             DateTime         @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id])
+  user   User?  @relation(fields: [userId], references: [id])
+
+  salaryStructures SalaryStructure[]
+  credentials      EmployeeCredential[]
+  attendanceEvents AttendanceEvent[]
+  attendanceDays   AttendanceDay[]
+  shiftAssignments ShiftAssignment[]
+  payrollLines     PayrollLine[]
+  advances         SalaryAdvance[]
+  leaveRequests    LeaveRequest[]
+  documents        LegalDocument[]
+
+  @@unique([tenantId, employeeCode])
+  @@index([tenantId, branchId, isActive])
+  @@map("employees")
+}
+
+/// Versioned rather than mutable, so a raise does not rewrite last month's payslip.
+model SalaryStructure {
+  id                     String    @id @default(uuid()) @db.Uuid
+  tenantId               String    @map("tenant_id") @db.Uuid
+  employeeId             String    @map("employee_id") @db.Uuid
+  effectiveFrom          DateTime  @map("effective_from")
+  effectiveTo            DateTime? @map("effective_to")
+  /// MONTHLY or DAILY. Daily-wage helpers are common.
+  basis                  String    @default("MONTHLY")
+  monthlyGrossMinor      Int?      @map("monthly_gross_minor")
+  dailyRateMinor         Int?      @map("daily_rate_minor")
+  /// Component breakdown, ready for EPF/ESI registration later:
+  /// { "basic": 900000, "hra": 200000, "allowance": 100000 }
+  components             Json      @default("{}")
+  overtimeRateMultiplier Decimal   @default(2.0) @map("overtime_rate_multiplier") @db.Decimal(4, 2)
+  /// Day of month salary falls due. Business says 10th (note: Payment of Wages
+  /// Act expects the 7th — see docs/ROADMAP.md).
+  payDayOfMonth          Int       @default(10) @map("pay_day_of_month")
+  createdAt              DateTime  @default(now()) @map("created_at")
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, employeeId, effectiveFrom])
+  @@map("salary_structures")
+}
+
+enum CredentialType {
+  PIN
+  NFC_CARD
+  RFID_FOB
+  BIOMETRIC_TEMPLATE_REF
+  MOBILE_DEVICE
+  QR_TOKEN
+}
+
+/// Whatever identifies a person to a punch device. Adding NFC cards in phase 3
+/// inserts rows here; no schema change, no migration of attendance history.
+model EmployeeCredential {
+  id            String         @id @default(uuid()) @db.Uuid
+  tenantId      String         @map("tenant_id") @db.Uuid
+  employeeId    String         @map("employee_id") @db.Uuid
+  type          CredentialType
+  /// Card UID / device id / opaque vendor template reference. Never a raw biometric.
+  identifier    String
+  /// Argon2 hash for PIN credentials.
+  secretHash    String?        @map("secret_hash")
+  issuedOn      DateTime       @default(now()) @map("issued_on")
+  revokedAt     DateTime?      @map("revoked_at")
+  revokedReason String?        @map("revoked_reason")
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, type, identifier])
+  @@index([tenantId, employeeId])
+  @@map("employee_credentials")
+}
+
+enum AttendanceSource {
+  MANUAL
+  WEB
+  QR
+  PIN
+  NFC
+  RFID
+  BIOMETRIC
+  MOBILE_GEO
+  IMPORT
+}
+
+/// A registered punch device. Hardware readers authenticate with an HMAC over the
+/// payload using `secretHash`'s plaintext counterpart, held only on the device.
+model AttendanceDevice {
+  id               String           @id @default(uuid()) @db.Uuid
+  tenantId         String           @map("tenant_id") @db.Uuid
+  branchId         String           @map("branch_id") @db.Uuid
+  code             String
+  name             String
+  kind             AttendanceSource
+  /// Hash of the shared secret used to sign punch payloads.
+  secretHash       String?          @map("secret_hash")
+  location         String?
+  lastSeenAt       DateTime?        @map("last_seen_at")
+  /// Cheap readers drift; corrected on the server using this offset.
+  clockSkewSeconds Int              @default(0) @map("clock_skew_seconds")
+  isActive         Boolean          @default(true) @map("is_active")
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  branch Branch            @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  events AttendanceEvent[]
+
+  @@unique([tenantId, code])
+  @@map("attendance_devices")
+}
+
+enum PunchDirection {
+  IN
+  OUT
+}
+
+/// APPEND-ONLY, immutable, low-trust. A correction is a NEW event pointing at the
+/// one it corrects. This separation from AttendanceDay is the core of the design.
+model AttendanceEvent {
+  id              String           @id @default(uuid()) @db.Uuid
+  tenantId        String           @map("tenant_id") @db.Uuid
+  branchId        String           @map("branch_id") @db.Uuid
+  employeeId      String           @map("employee_id") @db.Uuid
+  direction       PunchDirection
+  source          AttendanceSource
+  deviceId        String?          @map("device_id") @db.Uuid
+  /// When the punch happened (device time, skew-corrected).
+  occurredAt      DateTime         @map("occurred_at")
+  /// When the server received it. Differs for an offline reader backfilling.
+  recordedAt      DateTime         @default(now()) @map("recorded_at")
+  lat             Float?
+  lng             Float?
+  accuracyM       Float?           @map("accuracy_m")
+  /// True when a geofenced punch was outside the branch radius — flagged for review,
+  /// never hard-rejected (GPS drift in a dense market is real).
+  outsideGeofence Boolean          @default(false) @map("outside_geofence")
+  photoKey        String?          @map("photo_key")
+  /// Verbatim device payload, for debugging a misbehaving reader.
+  rawPayload      Json?            @map("raw_payload")
+  /// Correction chain.
+  correctsEventId String?          @map("corrects_event_id") @db.Uuid
+  isVoided        Boolean          @default(false) @map("is_voided")
+  reason          String?
+  byUserId        String?          @map("by_user_id") @db.Uuid
+  createdAt       DateTime         @default(now()) @map("created_at")
+
+  branch   Branch            @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  employee Employee          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  device   AttendanceDevice? @relation(fields: [deviceId], references: [id])
+
+  @@index([tenantId, employeeId, occurredAt])
+  @@index([tenantId, branchId, occurredAt])
+  @@map("attendance_events")
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  WEEKLY_OFF
+  HOLIDAY
+  LEAVE
+  NEEDS_REVIEW
+}
+
+/// DERIVED and recomputable from the event stream. Idempotent rebuild means
+/// importing a week of missed punches from a CSV just works.
+model AttendanceDay {
+  id                   String           @id @default(uuid()) @db.Uuid
+  tenantId             String           @map("tenant_id") @db.Uuid
+  branchId             String           @map("branch_id") @db.Uuid
+  employeeId           String           @map("employee_id") @db.Uuid
+  /// Local business date, not UTC — a 11 pm–2 am shift belongs to one day.
+  workDate             DateTime         @map("work_date") @db.Date
+  shiftId              String?          @map("shift_id") @db.Uuid
+  firstInAt            DateTime?        @map("first_in_at")
+  lastOutAt            DateTime?        @map("last_out_at")
+  workedMinutes        Int              @default(0) @map("worked_minutes")
+  breakMinutes         Int              @default(0) @map("break_minutes")
+  overtimeMinutes      Int              @default(0) @map("overtime_minutes")
+  lateMinutes          Int              @default(0) @map("late_minutes")
+  earlyOutMinutes      Int              @default(0) @map("early_out_minutes")
+  status               AttendanceStatus @default(ABSENT)
+  /// Set when punches are unpaired or implausible.
+  needsReviewReason    String?          @map("needs_review_reason")
+  approvedByUserId     String?          @map("approved_by_user_id") @db.Uuid
+  approvedAt           DateTime?        @map("approved_at")
+  /// Frozen once a PayrollRun has paid this day.
+  lockedByPayrollRunId String?          @map("locked_by_payroll_run_id") @db.Uuid
+  note                 String?
+  updatedAt            DateTime         @updatedAt @map("updated_at")
+
+  branch   Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift    Shift?   @relation(fields: [shiftId], references: [id])
+
+  @@unique([employeeId, workDate])
+  @@index([tenantId, branchId, workDate])
+  @@index([tenantId, status])
+  @@map("attendance_days")
+}
+
+model Shift {
+  id             String  @id @default(uuid()) @db.Uuid
+  tenantId       String  @map("tenant_id") @db.Uuid
+  branchId       String  @map("branch_id") @db.Uuid
+  name           String
+  startTime      String // "09:00" local @map("start_time")
+  endTime        String // "15:00"; may wrap past midnight @map("end_time")
+  breakMinutes   Int     @default(0) @map("break_minutes")
+  graceMinutes   Int     @default(10) @map("grace_minutes")
+  /// Minimum minutes to count a full day; below half of this = ABSENT.
+  fullDayMinutes Int     @default(480) @map("full_day_minutes")
+  isActive       Boolean @default(true) @map("is_active")
+
+  branch         Branch            @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  assignments    ShiftAssignment[]
+  attendanceDays AttendanceDay[]
+
+  @@unique([branchId, name])
+  @@map("shifts")
+}
+
+model ShiftAssignment {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  employeeId    String    @map("employee_id") @db.Uuid
+  shiftId       String    @map("shift_id") @db.Uuid
+  /// A date range, so the weekly roster is a handful of rows not one per day.
+  effectiveFrom DateTime  @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+  /// Days of week this applies to, 0 = Sunday. Empty = all days.
+  daysOfWeek    Int[]     @default([]) @map("days_of_week")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift    Shift    @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, employeeId, effectiveFrom])
+  @@map("shift_assignments")
+}
+
+enum LeaveStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model LeaveRequest {
+  id              String      @id @default(uuid()) @db.Uuid
+  tenantId        String      @map("tenant_id") @db.Uuid
+  employeeId      String      @map("employee_id") @db.Uuid
+  fromDate        DateTime    @map("from_date") @db.Date
+  toDate          DateTime    @map("to_date") @db.Date
+  isPaid          Boolean     @default(false) @map("is_paid")
+  reason          String?
+  status          LeaveStatus @default(REQUESTED)
+  decidedByUserId String?     @map("decided_by_user_id") @db.Uuid
+  decidedAt       DateTime?   @map("decided_at")
+  createdAt       DateTime    @default(now()) @map("created_at")
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, employeeId, fromDate])
+  @@map("leave_requests")
+}
+
+model Holiday {
+  id       String   @id @default(uuid()) @db.Uuid
+  tenantId String   @map("tenant_id") @db.Uuid
+  /// null = all branches.
+  branchId String?  @map("branch_id") @db.Uuid
+  date     DateTime @db.Date
+  name     String
+  isPaid   Boolean  @default(true) @map("is_paid")
+
+  @@unique([tenantId, branchId, date])
+  @@map("holidays")
+}
+
+enum PayrollRunStatus {
+  DRAFT
+  APPROVED
+  PAID
+  CANCELLED
+}
+
+model PayrollRun {
+  id               String           @id @default(uuid()) @db.Uuid
+  tenantId         String           @map("tenant_id") @db.Uuid
+  branchId         String           @map("branch_id") @db.Uuid
+  /// "2026-10"
+  period           String
+  periodStart      DateTime         @map("period_start") @db.Date
+  periodEnd        DateTime         @map("period_end") @db.Date
+  payDate          DateTime         @map("pay_date") @db.Date
+  status           PayrollRunStatus @default(DRAFT)
+  grossMinor       Int              @default(0) @map("gross_minor")
+  deductionsMinor  Int              @default(0) @map("deductions_minor")
+  netMinor         Int              @default(0) @map("net_minor")
+  approvedByUserId String?          @map("approved_by_user_id") @db.Uuid
+  approvedAt       DateTime?        @map("approved_at")
+  paidAt           DateTime?        @map("paid_at")
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  branch Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  lines  PayrollLine[]
+
+  @@unique([branchId, period])
+  @@index([tenantId, status])
+  @@map("payroll_runs")
+}
+
+model PayrollLine {
+  id                    String    @id @default(uuid()) @db.Uuid
+  tenantId              String    @map("tenant_id") @db.Uuid
+  payrollRunId          String    @map("payroll_run_id") @db.Uuid
+  employeeId            String    @map("employee_id") @db.Uuid
+  presentDays           Decimal   @map("present_days") @db.Decimal(6, 2)
+  paidLeaveDays         Decimal   @default(0) @map("paid_leave_days") @db.Decimal(6, 2)
+  absentDays            Decimal   @default(0) @map("absent_days") @db.Decimal(6, 2)
+  overtimeMinutes       Int       @default(0) @map("overtime_minutes")
+  basicMinor            Int       @default(0) @map("basic_minor")
+  overtimeMinor         Int       @default(0) @map("overtime_minor")
+  bonusMinor            Int       @default(0) @map("bonus_minor")
+  advanceDeductionMinor Int       @default(0) @map("advance_deduction_minor")
+  otherDeductionMinor   Int       @default(0) @map("other_deduction_minor")
+  grossMinor            Int       @map("gross_minor")
+  netMinor              Int       @map("net_minor")
+  paymentMethod         String?   @map("payment_method")
+  paymentReference      String?   @map("payment_reference")
+  paidAt                DateTime? @map("paid_at")
+  payslipKey            String?   @map("payslip_key")
+  notes                 String?
+
+  run      PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  employee Employee   @relation(fields: [employeeId], references: [id])
+
+  @@unique([payrollRunId, employeeId])
+  @@index([tenantId, employeeId])
+  @@map("payroll_lines")
+}
+
+/// Advances against salary are universal in this segment. Tracked so the payroll
+/// run deducts them automatically instead of someone remembering.
+model SalaryAdvance {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  employeeId     String   @map("employee_id") @db.Uuid
+  amountMinor    Int      @map("amount_minor")
+  recoveredMinor Int      @default(0) @map("recovered_minor")
+  reason         String?
+  givenOn        DateTime @default(now()) @map("given_on")
+  givenByUserId  String?  @map("given_by_user_id") @db.Uuid
+  isSettled      Boolean  @default(false) @map("is_settled")
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, employeeId, isSettled])
+  @@map("salary_advances")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// LEGAL DOCUMENTS
+// ───────────────────────────────────────────────────────────────────────────
+
+enum LegalDocumentCategory {
+  PARTNERSHIP_DEED
+  FSSAI_REGISTRATION
+  TRADE_LICENSE
+  SHOP_ESTABLISHMENT
+  GST_CERTIFICATE
+  RENT_AGREEMENT
+  STAFF_CONTRACT
+  INSURANCE
+  FIRE_NOC
+  POLLUTION_NOC
+  UTILITY_AGREEMENT
+  BANK_DOCUMENT
+  INVOICE
+  PAN_TAN
+  OTHER
+}
+
+/// Envelope-encrypted object in S3; the row holds only an opaque key.
+/// Downloads are presigned and logged. OWNER/PARTNER only.
+model LegalDocument {
+  id                   String                @id @default(uuid()) @db.Uuid
+  tenantId             String                @map("tenant_id") @db.Uuid
+  /// null = applies to the whole business.
+  branchId             String?               @map("branch_id") @db.Uuid
+  /// Set for staff contracts.
+  employeeId           String?               @map("employee_id") @db.Uuid
+  category             LegalDocumentCategory
+  title                String
+  documentNumber       String?               @map("document_number")
+  issuingAuthority     String?               @map("issuing_authority")
+  issuedOn             DateTime?             @map("issued_on")
+  /// Drives the reminder job. Several of these are annual renewals.
+  expiresOn            DateTime?             @map("expires_on")
+  /// How many days before expiry to start nagging.
+  renewalLeadDays      Int                   @default(60) @map("renewal_lead_days")
+  renewalFeeMinor      Int?                  @map("renewal_fee_minor")
+  /// S3 object key. Never a URL.
+  fileKey              String                @map("file_key")
+  fileName             String                @map("file_name")
+  mimeType             String                @map("mime_type")
+  fileSizeBytes        Int                   @map("file_size_bytes")
+  /// SHA-256 of the plaintext — detects silent corruption or tampering.
+  checksumSha256       String                @map("checksum_sha256")
+  /// Base64 data key, itself encrypted with the master key (envelope encryption).
+  encryptedDataKey     String?               @map("encrypted_data_key")
+  /// Supersession chain: a renewed FSSAI certificate points at the old one.
+  supersedesDocumentId String?               @map("supersedes_document_id") @db.Uuid
+  isArchived           Boolean               @default(false) @map("is_archived")
+  tags                 String[]              @default([])
+  notes                String?
+  uploadedByUserId     String?               @map("uploaded_by_user_id") @db.Uuid
+  createdAt            DateTime              @default(now()) @map("created_at")
+  updatedAt            DateTime              @updatedAt @map("updated_at")
+
+  tenant     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch     Branch?             @relation(fields: [branchId], references: [id])
+  employee   Employee?           @relation(fields: [employeeId], references: [id])
+  reminders  DocumentReminder[]
+  accessLogs DocumentAccessLog[]
+
+  @@index([tenantId, category])
+  @@index([tenantId, expiresOn])
+  @@map("legal_documents")
+}
+
+model DocumentReminder {
+  id                   String    @id @default(uuid()) @db.Uuid
+  tenantId             String    @map("tenant_id") @db.Uuid
+  documentId           String    @map("document_id") @db.Uuid
+  /// Days before expiry this reminder fires: 60, 30, 7, 1, 0.
+  offsetDays           Int       @map("offset_days")
+  dueOn                DateTime  @map("due_on") @db.Date
+  channel              String    @default("EMAIL")
+  sentAt               DateTime? @map("sent_at")
+  acknowledgedByUserId String?   @map("acknowledged_by_user_id") @db.Uuid
+  acknowledgedAt       DateTime? @map("acknowledged_at")
+
+  document LegalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, offsetDays])
+  @@index([tenantId, dueOn, sentAt])
+  @@map("document_reminders")
+}
+
+model DocumentAccessLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  documentId String   @map("document_id") @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  action     String // VIEW_METADATA, DOWNLOAD, UPDATE, ARCHIVE
+  ip         String?
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  document LegalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, documentId, createdAt])
+  @@map("document_access_logs")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// EXPENSES, REPORTING ROLLUPS, AUDIT
+// ───────────────────────────────────────────────────────────────────────────
+
+model ExpenseCategory {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String  @map("tenant_id") @db.Uuid
+  name     String
+  /// Rent and salaries are fixed; gas and vegetables are variable. Needed for a
+  /// break-even number.
+  isFixed  Boolean @default(false) @map("is_fixed")
+  isActive Boolean @default(true) @map("is_active")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+
+  @@unique([tenantId, name])
+  @@map("expense_categories")
+}
+
+model Expense {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  branchId        String   @map("branch_id") @db.Uuid
+  categoryId      String   @map("category_id") @db.Uuid
+  amountMinor     Int      @map("amount_minor")
+  incurredOn      DateTime @map("incurred_on") @db.Date
+  paymentMethod   String?  @map("payment_method")
+  reference       String?
+  billFileKey     String?  @map("bill_file_key")
+  description     String?
+  enteredByUserId String?  @map("entered_by_user_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  branch   Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  category ExpenseCategory @relation(fields: [categoryId], references: [id])
+
+  @@index([tenantId, branchId, incurredOn])
+  @@map("expenses")
+}
+
+/// Nightly rollup per branch per day. Keeps the owner dashboard instant and
+/// gives branch-vs-branch comparison a single cheap table to read.
+model DailySummary {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  branchId     String   @map("branch_id") @db.Uuid
+  businessDate DateTime @map("business_date") @db.Date
+
+  orderCount        Int       @default(0) @map("order_count")
+  guestCount        Int       @default(0) @map("guest_count")
+  grossSalesMinor   Int       @default(0) @map("gross_sales_minor")
+  discountMinor     Int       @default(0) @map("discount_minor")
+  netSalesMinor     Int       @default(0) @map("net_sales_minor")
+  taxMinor          Int       @default(0) @map("tax_minor")
+  cogsMinor         Int       @default(0) @map("cogs_minor")
+  wastageMinor      Int       @default(0) @map("wastage_minor")
+  labourCostMinor   Int       @default(0) @map("labour_cost_minor")
+  otherExpenseMinor Int       @default(0) @map("other_expense_minor")
+  cashSalesMinor    Int       @default(0) @map("cash_sales_minor")
+  upiSalesMinor     Int       @default(0) @map("upi_sales_minor")
+  cardSalesMinor    Int       @default(0) @map("card_sales_minor")
+  onlineSalesMinor  Int       @default(0) @map("online_sales_minor")
+  avgTicketMinor    Int       @default(0) @map("avg_ticket_minor")
+  /// Basis points: 3250 = 32.50%
+  foodCostBp        Int       @default(0) @map("food_cost_bp")
+  labourCostBp      Int       @default(0) @map("labour_cost_bp")
+  /// Per-slot split, for deciding whether the evening Chinese counter earns its keep:
+  /// { "LUNCH": { "orders": 62, "netMinor": 744000 }, ... }
+  slotBreakdown     Json      @default("{}") @map("slot_breakdown")
+  topItems          Json      @default("[]") @map("top_items")
+  /// Set when the manager completes the day-close checklist.
+  closedByUserId    String?   @map("closed_by_user_id") @db.Uuid
+  closedAt          DateTime? @map("closed_at")
+  computedAt        DateTime  @default(now()) @map("computed_at")
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, businessDate])
+  @@index([tenantId, businessDate])
+  @@map("daily_summaries")
+}
+
+/// Append-only (a trigger rejects UPDATE/DELETE). Written for every mutation on a
+/// financial, payroll, legal or access-control entity.
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  branchId   String?  @map("branch_id") @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  actorLabel String?  @map("actor_label")
+  action     String // CREATE | UPDATE | DELETE | LOGIN | SETTLE | APPROVE | DOWNLOAD ...
+  entity     String
+  entityId   String?  @map("entity_id")
+  /// Field-level diff, with secrets redacted.
+  before     Json?
+  after      Json?
+  ip         String?
+  userAgent  String?  @map("user_agent")
+  requestId  String?  @map("request_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, entity, entityId])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, userId, createdAt])
+  @@map("audit_logs")
+}
+
+/// Outbound notification queue — e-mail, WhatsApp, SMS. Persisted so a failed
+/// renewal reminder is retried rather than lost.
+model NotificationOutbox {
+  id           String    @id @default(uuid()) @db.Uuid
+  tenantId     String    @map("tenant_id") @db.Uuid
+  channel      String // EMAIL | SMS | WHATSAPP | PUSH
+  recipient    String
+  template     String
+  payload      Json
+  status       String    @default("PENDING")
+  attempts     Int       @default(0)
+  lastError    String?   @map("last_error")
+  scheduledFor DateTime  @default(now()) @map("scheduled_for")
+  sentAt       DateTime? @map("sent_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([status, scheduledFor])
+  @@index([tenantId, createdAt])
+  @@map("notification_outbox")
+}
