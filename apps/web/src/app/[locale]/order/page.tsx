@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { getDictionary } from '@mk/shared';
-import { SiteFooter, SiteHeader } from '@/components/site-chrome';
+import { AnnouncementBar, FloatingWhatsApp, MarketingFooter, MarketingHeader, MobileActionBar } from '@/components/marketing';
 import { OrderFlow } from '@/components/order-flow';
 import { serverGet, type PublicBranch, type PublicMenuCategory } from '@/lib/server-api';
 import { resolveLocale } from '@/lib/i18n';
@@ -21,7 +21,8 @@ export default async function OrderPage({ params }: { params: Promise<{ locale: 
 
   return (
     <>
-      <SiteHeader />
+      <AnnouncementBar />
+      <MarketingHeader />
       <main className="mx-auto max-w-5xl px-4 py-10">
         <h1 className="font-display text-3xl font-bold text-brand-900">{dict.nav.orderOnline}</h1>
         <p className="mt-2 text-ink-600">{dict.checkout.pickupLabel}</p>
@@ -31,7 +32,9 @@ export default async function OrderPage({ params }: { params: Promise<{ locale: 
           <p className="mt-8 text-ink-400">{dict.common.error}</p>
         )}
       </main>
-      <SiteFooter />
+      <MarketingFooter />
+      <FloatingWhatsApp />
+      <MobileActionBar />
     </>
   );
 }

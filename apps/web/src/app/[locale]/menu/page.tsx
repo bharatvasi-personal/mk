@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { getDictionary } from '@mk/shared';
 import { MenuList } from '@/components/menu-list';
-import { SiteFooter, SiteHeader } from '@/components/site-chrome';
+import { AnnouncementBar, FloatingWhatsApp, MarketingFooter, MarketingHeader, MobileActionBar } from '@/components/marketing';
 import { serverGet, type PublicBranch, type PublicMenuCategory } from '@/lib/server-api';
 import { resolveLocale } from '@/lib/i18n';
 import { BRAND_NAME } from '@/lib/config';
@@ -26,7 +26,8 @@ export default async function MenuPage({ params }: { params: Promise<{ locale: s
 
   return (
     <>
-      <SiteHeader />
+      <AnnouncementBar />
+      <MarketingHeader />
       <main className="mx-auto max-w-5xl px-4 py-10">
         <h1 className="font-display text-3xl font-bold text-brand-900">{dict.menu.title}</h1>
         <p className="mt-2 text-ink-600">{dict.menu.subtitle}</p>
@@ -38,7 +39,9 @@ export default async function MenuPage({ params }: { params: Promise<{ locale: s
           )}
         </div>
       </main>
-      <SiteFooter />
+      <MarketingFooter />
+      <FloatingWhatsApp />
+      <MobileActionBar />
     </>
   );
 }

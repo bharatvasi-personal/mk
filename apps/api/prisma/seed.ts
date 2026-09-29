@@ -160,6 +160,10 @@ async function main(): Promise<void> {
   // ─── Menu ─────────────────────────────────────────────────────────────────
   // Prices are Tellapur-realistic for Oct 2026: a working-class thali at ₹90–130,
   // chai at ₹12, Chinese plates at ₹70–120. Correct these against your real costing.
+  // The real menu, matching the public site. Descriptions follow a convention the
+  // landing page relies on: prose first, then the itemised contents separated by " • ".
+  // One field serves both the paragraph the menu page wants and the checklist the
+  // landing page shows.
   const menu: {
     category: string;
     categoryTe: string;
@@ -173,150 +177,84 @@ async function main(): Promise<void> {
       type?: 'VEG' | 'NON_VEG' | 'EGG';
       lessOil?: boolean;
       mithila?: boolean;
-      variants: { name: string; price: number }[];
+      variants: { name: string; price: number; was?: number }[];
     }[];
   }[] = [
     {
-      category: 'Thali',
-      categoryHi: 'थाली',
-      categoryTe: 'థాలీ',
+      category: 'Ghar ki Thali',
+      categoryHi: 'घर की थाली',
+      categoryTe: 'ఘర్ కి థాలీ',
       slot: 'LUNCH',
       items: [
         {
-          name: 'Veg Thali',
-          hi: 'वेज थाली',
-          te: 'వెజ్ థాలీ',
-          desc: 'Rice, dal, two seasonal vegetables, roti, salad, pickle, papad',
+          name: 'Ghar Ki Thali (Veg) - Roti Thali',
+          hi: 'घर की थाली (वेज) — रोटी थाली',
+          te: 'ఘర్ కి థాలీ (వెజ్) — రోటీ థాలీ',
+          desc:
+            'Wholesome everyday noon meal with fresh seasonal green sabzi and slow-simmered yellow arhar dal with jeera-ghee tadka. ' +
+            '4 Soft Hand-Rolled Rotis • Homestyle Yellow Dal Tadka • Seasonal Green Sabzi • Steamed Rice • Kachumber Salad & Achaar',
           lessOil: true,
-          variants: [
-            { name: 'Regular', price: 100 },
-            { name: 'Full', price: 130 },
-          ],
+          variants: [{ name: 'Regular', price: 99, was: 149 }],
         },
         {
-          name: 'Special Mithila Thali',
-          hi: 'स्पेशल मिथिला थाली',
-          te: 'స్పెషల్ మిథిలా థాలీ',
-          desc: 'Rice, dal, aloo-bhujia, seasonal saag, dahi, chutney, papad, sweet',
-          mithila: true,
+          name: 'Ghar Ki Thali (Veg) - Paratha Thali',
+          hi: 'घर की थाली (वेज) — पराठा थाली',
+          te: 'ఘర్ కి థాలీ (వెజ్) — పరాఠా థాలీ',
+          desc:
+            'Crispy layered parathas paired with homestyle cooking and aromatic yellow dal tadka. ' +
+            '3 Golden Layered Parathas • Homestyle Yellow Dal Tadka • Seasonal Green Sabzi • Steamed Rice • Kachumber Salad & Achaar',
           lessOil: true,
-          variants: [{ name: 'Regular', price: 150 }],
+          variants: [{ name: 'Regular', price: 99, was: 149 }],
         },
         {
-          name: 'Chicken Thali',
-          hi: 'चिकन थाली',
-          te: 'చికెన్ థాలీ',
-          desc: 'Rice, dal, home-style chicken curry, roti, salad',
+          name: 'Ghar Ki Thali (Non-Veg) - Roti Thali',
+          hi: 'घर की थाली (नॉन-वेज) — रोटी थाली',
+          te: 'ఘర్ కి థాలీ (నాన్-వెజ్) — రోటీ థాలీ',
+          desc:
+            'Authentic homestyle chicken curry cooked with freshly ground spices and onions in mustard oil. ' +
+            'Homestyle Chicken Curry (3 Pcs) • 4 Soft Hand-Rolled Rotis • Yellow Dal Tadka • Steamed Rice • Sirka Onion Salad & Pickle',
           type: 'NON_VEG',
-          variants: [{ name: 'Regular', price: 180 }],
+          variants: [{ name: 'Regular', price: 149, was: 199 }],
         },
         {
-          name: 'Egg Thali',
-          hi: 'अंडा थाली',
-          te: 'ఎగ్ థాలీ',
-          type: 'EGG',
-          variants: [{ name: 'Regular', price: 130 }],
+          name: 'Ghar Ki Thali (Non-Veg) - Paratha Thali',
+          hi: 'घर की थाली (नॉन-वेज) — पराठा थाली',
+          te: 'ఘర్ కి థాలీ (నాన్-వెజ్) — పరాఠా థాలీ',
+          desc:
+            'Juicy, flavour-packed homestyle chicken curry paired with crispy flaky tawa parathas. ' +
+            'Homestyle Chicken Curry (3 Pcs) • 3 Golden Layered Parathas • Yellow Dal Tadka • Steamed Rice • Sirka Onion Salad & Pickle',
+          type: 'NON_VEG',
+          variants: [{ name: 'Regular', price: 149, was: 199 }],
         },
       ],
     },
     {
-      category: 'Mithila Specials',
-      categoryHi: 'मिथिला स्पेशल',
-      categoryTe: 'మిథిలా స్పెషల్స్',
+      category: 'Mithila Deluxe Royal',
+      categoryHi: 'मिथिला डीलक्स रॉयल',
+      categoryTe: 'మిథిలా డీలక్స్ రాయల్',
       slot: 'LUNCH',
       items: [
         {
-          name: 'Litti Chokha',
-          hi: 'लिट्टी चोखा',
-          te: 'లిట్టీ చోఖా',
-          desc: 'Roasted wheat balls stuffed with sattu, with brinjal-tomato chokha',
+          name: 'Mithila Deluxe Royal (Veg)',
+          hi: 'मिथिला डीलक्स रॉयल (वेज)',
+          te: 'మిథిలా డీలక్స్ రాయల్ (వెజ్)',
+          desc:
+            'A richer midday royal vegetarian feast with rich paneer butter masala and fragrant jeera basmati rice. ' +
+            'Paneer Makhani / Shahi Gravy • Dry Seasonal Veggie • Panchmel Dal • Jeera Basmati Rice • 4 Rotis OR 3 Parathas • Dahi & Sweet Gulab Jamun',
           mithila: true,
-          lessOil: true,
-          variants: [
-            { name: '2 pcs', price: 70 },
-            { name: '4 pcs', price: 130 },
-          ],
+          variants: [{ name: 'Regular', price: 149, was: 199 }],
         },
         {
-          name: 'Dal Pitha',
-          hi: 'दाल पिठा',
-          te: 'దాల్ పిఠా',
-          desc: 'Steamed rice dumplings stuffed with spiced lentils',
-          mithila: true,
-          lessOil: true,
-          variants: [{ name: '4 pcs', price: 80 }],
-        },
-        {
-          name: 'Sattu Paratha',
-          hi: 'सत्तू पराठा',
-          te: 'సత్తు పరాఠా',
-          mithila: true,
-          variants: [{ name: '2 pcs', price: 60 }],
-        },
-      ],
-    },
-    {
-      category: 'Chai & Snacks',
-      categoryHi: 'चाय और नाश्ता',
-      categoryTe: 'చాయ్ & స్నాక్స్',
-      slot: 'CHAI',
-      items: [
-        {
-          name: 'Masala Chai',
-          hi: 'मसाला चाय',
-          te: 'మసాలా చాయ్',
-          variants: [
-            { name: 'Cutting', price: 12 },
-            { name: 'Full', price: 20 },
-          ],
-        },
-        { name: 'Filter Coffee', hi: 'फिल्टर कॉफी', te: 'ఫిల్టర్ కాఫీ', variants: [{ name: 'Regular', price: 25 }] },
-        { name: 'Samosa', hi: 'समोसा', te: 'సమోసా', variants: [{ name: '1 pc', price: 15 }] },
-        { name: 'Poha', hi: 'पोहा', te: 'పోహా', lessOil: true, variants: [{ name: 'Plate', price: 40 }] },
-        { name: 'Idli Sambar', hi: 'इडली सांभर', te: 'ఇడ్లీ సాంబార్', lessOil: true, variants: [{ name: '2 pcs', price: 40 }] },
-      ],
-    },
-    {
-      category: 'Chinese Counter',
-      categoryHi: 'चाइनीज़',
-      categoryTe: 'చైనీస్',
-      slot: 'EVENING',
-      items: [
-        {
-          name: 'Veg Noodles',
-          hi: 'वेज नूडल्स',
-          te: 'వెజ్ నూడుల్స్',
-          variants: [
-            { name: 'Half', price: 70 },
-            { name: 'Full', price: 110 },
-          ],
-        },
-        {
-          name: 'Veg Fried Rice',
-          hi: 'वेज फ्राइड राइस',
-          te: 'వెజ్ ఫ్రైడ్ రైస్',
-          variants: [
-            { name: 'Half', price: 70 },
-            { name: 'Full', price: 110 },
-          ],
-        },
-        {
-          name: 'Chicken Noodles',
-          hi: 'चिकन नूडल्स',
-          te: 'చికెన్ నూడుల్స్',
+          name: 'Mithila Deluxe Royal (Non-Veg)',
+          hi: 'मिथिला डीलक्स रॉयल (नॉन-वेज)',
+          te: 'మిథిలా డీలక్స్ రాయల్ (నాన్-వెజ్)',
+          desc:
+            'The ultimate royal feast with a generous portion of slow-cooked special Mithila chicken curry. ' +
+            'Special Mithila Chicken Curry • Dry Seasonal Vegetable • Yellow Dal Tadka • Jeera Basmati Rice • 4 Rotis OR 3 Parathas • Fresh Raita & Sweet',
           type: 'NON_VEG',
-          variants: [
-            { name: 'Half', price: 90 },
-            { name: 'Full', price: 140 },
-          ],
+          mithila: true,
+          variants: [{ name: 'Regular', price: 199, was: 249 }],
         },
-        {
-          name: 'Gobi Manchurian',
-          hi: 'गोभी मंचूरियन',
-          te: 'గోబీ మంచూరియన్',
-          variants: [{ name: 'Plate', price: 90 }],
-        },
-        { name: 'Egg Fried Rice', hi: 'अंडा फ्राइड राइस', te: 'ఎగ్ ఫ్రైడ్ రైస్', type: 'EGG', variants: [{ name: 'Full', price: 100 }] },
       ],
     },
   ];
@@ -385,12 +323,39 @@ async function main(): Promise<void> {
             variantId: variant.id,
             mealSlot: cat.slot,
             priceMinor: R(v.price),
+            compareAtPriceMinor: v.was ? R(v.was) : null,
             gstRateBp: 500,
             // A 12x18 shop genuinely runs out. Cap the thali so the online store stops selling.
             dailyLimit: item.name.includes('Thali') ? 80 : null,
           },
-          update: {},
+          update: { priceMinor: R(v.price), compareAtPriceMinor: v.was ? R(v.was) : null },
         });
+
+        // Lunch and dinner are the same menu at the same price, so each dish is priced
+        // into both slots rather than duplicated.
+        if (cat.slot === 'LUNCH') {
+          await prisma.branchMenuItem.upsert({
+            where: {
+              branchId_variantId_mealSlot: {
+                branchId: branch.id,
+                variantId: variant.id,
+                mealSlot: 'EVENING',
+              },
+            },
+            create: {
+              tenantId: tenant.id,
+              branchId: branch.id,
+              menuItemId: menuItem.id,
+              variantId: variant.id,
+              mealSlot: 'EVENING',
+              priceMinor: R(v.price),
+              compareAtPriceMinor: v.was ? R(v.was) : null,
+              gstRateBp: 500,
+              dailyLimit: 80,
+            },
+            update: { priceMinor: R(v.price), compareAtPriceMinor: v.was ? R(v.was) : null },
+          });
+        }
       }
     }
   }
@@ -517,140 +482,120 @@ async function main(): Promise<void> {
   // ─── Recipes ──────────────────────────────────────────────────────────────
   // Quantities are per serving. These drive automatic stock depletion and the live
   // food-cost percentage — the single most valuable thing in the system once real.
+  // Recipes for the real menu. Quantities are plausible starting points, NOT measured —
+  // weigh a real thali during test cooking and correct them. Food cost is only worth
+  // reading once these are yours.
   const recipes: { item: string; variant: string; lines: [string, number, string, number?][] }[] = [
     {
-      item: 'Veg Thali',
+      item: 'Ghar Ki Thali (Veg) - Roti Thali',
       variant: 'Regular',
       lines: [
-        ['RICE-SONA', 0.15, 'kg'],
+        ['ATTA', 0.12, 'kg'],
+        ['RICE-SONA', 0.12, 'kg'],
         ['DAL-TOOR', 0.05, 'kg'],
-        ['ATTA', 0.08, 'kg'],
-        ['POTATO', 0.1, 'kg', 15],
+        ['POTATO', 0.08, 'kg', 15],
+        ['CAULI', 0.06, 'kg', 25],
         ['ONION', 0.05, 'kg', 10],
         ['TOMATO', 0.04, 'kg', 8],
-        ['SAAG', 0.25, 'bundle', 20],
         ['OIL-SUN', 0.015, 'L'],
         ['SPICE-TUR', 0.002, 'kg'],
         ['SPICE-CHI', 0.003, 'kg'],
         ['SALT', 0.004, 'kg'],
+        ['PKG-BOX', 1, 'pcs'],
+        ['PKG-BAG', 1, 'pcs'],
       ],
     },
     {
-      item: 'Veg Thali',
-      variant: 'Full',
-      lines: [
-        ['RICE-SONA', 0.2, 'kg'],
-        ['DAL-TOOR', 0.07, 'kg'],
-        ['ATTA', 0.12, 'kg'],
-        ['POTATO', 0.14, 'kg', 15],
-        ['ONION', 0.06, 'kg', 10],
-        ['TOMATO', 0.05, 'kg', 8],
-        ['SAAG', 0.3, 'bundle', 20],
-        ['CURD', 0.08, 'kg'],
-        ['OIL-SUN', 0.02, 'L'],
-        ['SPICE-TUR', 0.003, 'kg'],
-        ['SPICE-CHI', 0.004, 'kg'],
-        ['SALT', 0.005, 'kg'],
-      ],
-    },
-    {
-      item: 'Special Mithila Thali',
+      item: 'Ghar Ki Thali (Veg) - Paratha Thali',
       variant: 'Regular',
       lines: [
-        ['RICE-SONA', 0.18, 'kg'],
-        ['DAL-TOOR', 0.06, 'kg'],
-        ['ATTA', 0.1, 'kg'],
-        ['POTATO', 0.15, 'kg', 15],
-        ['SAAG', 0.4, 'bundle', 20],
-        ['CURD', 0.1, 'kg'],
+        ['ATTA', 0.14, 'kg'],
+        ['RICE-SONA', 0.12, 'kg'],
+        ['DAL-TOOR', 0.05, 'kg'],
+        ['POTATO', 0.08, 'kg', 15],
+        ['CABBAGE', 0.06, 'kg', 15],
         ['ONION', 0.05, 'kg', 10],
-        ['OIL-SUN', 0.018, 'L'],
-        ['SPICE-GAR', 0.002, 'kg'],
-        ['SALT', 0.005, 'kg'],
-        ['SUGAR', 0.02, 'kg'],
+        ['OIL-SUN', 0.03, 'L'],
+        ['SPICE-TUR', 0.002, 'kg'],
+        ['SALT', 0.004, 'kg'],
+        ['PKG-BOX', 1, 'pcs'],
+        ['PKG-BAG', 1, 'pcs'],
       ],
     },
     {
-      item: 'Chicken Thali',
+      item: 'Ghar Ki Thali (Non-Veg) - Roti Thali',
       variant: 'Regular',
       lines: [
-        ['RICE-SONA', 0.15, 'kg'],
-        ['DAL-TOOR', 0.04, 'kg'],
-        ['ATTA', 0.08, 'kg'],
         ['CHICKEN', 0.18, 'kg', 8],
-        ['ONION', 0.08, 'kg', 10],
+        ['ATTA', 0.12, 'kg'],
+        ['RICE-SONA', 0.12, 'kg'],
+        ['DAL-TOOR', 0.04, 'kg'],
+        ['ONION', 0.09, 'kg', 10],
         ['TOMATO', 0.06, 'kg', 8],
         ['OIL-SUN', 0.025, 'L'],
         ['SPICE-GAR', 0.003, 'kg'],
         ['SPICE-CHI', 0.004, 'kg'],
         ['SALT', 0.005, 'kg'],
+        ['PKG-BOX', 1, 'pcs'],
+        ['PKG-BAG', 1, 'pcs'],
       ],
     },
     {
-      item: 'Litti Chokha',
-      variant: '2 pcs',
+      item: 'Ghar Ki Thali (Non-Veg) - Paratha Thali',
+      variant: 'Regular',
       lines: [
-        ['ATTA', 0.1, 'kg'],
-        ['SATTU', 0.05, 'kg'],
-        ['BRINJAL', 0.12, 'kg', 20],
+        ['CHICKEN', 0.18, 'kg', 8],
+        ['ATTA', 0.14, 'kg'],
+        ['RICE-SONA', 0.12, 'kg'],
+        ['DAL-TOOR', 0.04, 'kg'],
+        ['ONION', 0.09, 'kg', 10],
         ['TOMATO', 0.06, 'kg', 8],
-        ['ONION', 0.03, 'kg', 10],
-        ['OIL-SUN', 0.01, 'L'],
-        ['SALT', 0.003, 'kg'],
+        ['OIL-SUN', 0.04, 'L'],
+        ['SPICE-GAR', 0.003, 'kg'],
+        ['SALT', 0.005, 'kg'],
+        ['PKG-BOX', 1, 'pcs'],
+        ['PKG-BAG', 1, 'pcs'],
       ],
     },
     {
-      item: 'Masala Chai',
-      variant: 'Cutting',
+      item: 'Mithila Deluxe Royal (Veg)',
+      variant: 'Regular',
       lines: [
-        ['MILK', 0.06, 'L'],
-        ['TEA-DUST', 0.004, 'kg'],
-        ['SUGAR', 0.008, 'kg'],
-        ['PKG-CUP', 1, 'pcs'],
-      ],
-    },
-    {
-      item: 'Masala Chai',
-      variant: 'Full',
-      lines: [
-        ['MILK', 0.1, 'L'],
-        ['TEA-DUST', 0.006, 'kg'],
-        ['SUGAR', 0.012, 'kg'],
-        ['PKG-CUP', 1, 'pcs'],
-      ],
-    },
-    {
-      item: 'Veg Noodles',
-      variant: 'Full',
-      lines: [
-        ['NOODLES', 0.12, 'kg'],
-        ['CABBAGE', 0.06, 'kg', 15],
-        ['ONION', 0.04, 'kg', 10],
-        ['SOYA-SAUCE', 0.01, 'L'],
+        ['PANEER', 0.09, 'kg'],
+        ['ATTA', 0.12, 'kg'],
+        ['RICE-SONA', 0.14, 'kg'],
+        ['DAL-TOOR', 0.05, 'kg'],
+        ['CURD', 0.08, 'kg'],
+        ['MILK', 0.05, 'L'],
+        ['ONION', 0.06, 'kg', 10],
+        ['TOMATO', 0.06, 'kg', 8],
+        ['CAULI', 0.05, 'kg', 25],
         ['OIL-SUN', 0.02, 'L'],
-        ['SALT', 0.003, 'kg'],
+        ['SUGAR', 0.03, 'kg'],
+        ['SPICE-GAR', 0.003, 'kg'],
+        ['SALT', 0.005, 'kg'],
+        ['PKG-BOX', 1, 'pcs'],
+        ['PKG-BAG', 1, 'pcs'],
       ],
     },
     {
-      item: 'Veg Noodles',
-      variant: 'Half',
+      item: 'Mithila Deluxe Royal (Non-Veg)',
+      variant: 'Regular',
       lines: [
-        ['NOODLES', 0.07, 'kg'],
-        ['CABBAGE', 0.04, 'kg', 15],
-        ['ONION', 0.025, 'kg', 10],
-        ['SOYA-SAUCE', 0.006, 'L'],
-        ['OIL-SUN', 0.012, 'L'],
-      ],
-    },
-    {
-      item: 'Gobi Manchurian',
-      variant: 'Plate',
-      lines: [
-        ['CAULI', 0.2, 'kg', 25],
-        ['ONION', 0.04, 'kg', 10],
-        ['ATTA', 0.03, 'kg'],
-        ['SOYA-SAUCE', 0.012, 'L'],
-        ['OIL-SUN', 0.05, 'L'],
+        ['CHICKEN', 0.25, 'kg', 8],
+        ['ATTA', 0.12, 'kg'],
+        ['RICE-SONA', 0.14, 'kg'],
+        ['DAL-TOOR', 0.05, 'kg'],
+        ['CURD', 0.08, 'kg'],
+        ['ONION', 0.1, 'kg', 10],
+        ['TOMATO', 0.07, 'kg', 8],
+        ['CABBAGE', 0.05, 'kg', 15],
+        ['OIL-SUN', 0.03, 'L'],
+        ['SUGAR', 0.03, 'kg'],
+        ['SPICE-GAR', 0.004, 'kg'],
+        ['SALT', 0.005, 'kg'],
+        ['PKG-BOX', 1, 'pcs'],
+        ['PKG-BAG', 1, 'pcs'],
       ],
     },
   ];

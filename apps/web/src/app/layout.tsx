@@ -1,8 +1,28 @@
 import type { Metadata, Viewport } from 'next';
+import { Playfair_Display, Plus_Jakarta_Sans } from 'next/font/google';
 import './globals.css';
 import { Providers } from '@/components/providers';
 import { ServiceWorkerRegistrar } from '@/components/service-worker';
-import { BRAND_NAME } from '@/lib/config';
+import { BRAND_NAME, SHOP } from '@/lib/config';
+
+/*
+ * The two faces the brand actually uses. Loaded through next/font so they are
+ * self-hosted, preloaded and subset — a webfont request to Google on a 4G tether is a
+ * render-blocking round trip to somebody else's server.
+ */
+const playfair = Playfair_Display({
+  subsets: ['latin'],
+  weight: ['400', '600', '700', '800'],
+  variable: '--font-playfair',
+  display: 'swap',
+});
+
+const jakarta = Plus_Jakarta_Sans({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700', '800'],
+  variable: '--font-jakarta',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   // Without this, Open Graph image URLs resolve against localhost, so the share card is
@@ -10,19 +30,22 @@ export const metadata: Metadata = {
   // WhatsApp preview stays blank, which is the exact problem the card exists to solve.
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'),
   title: {
-    default: `${BRAND_NAME} — Home food, made honestly | Tellapur, Hyderabad`,
+    default: `Mithila Kitchen Hyderabad — Homely Food Has Arrived`,
     template: `%s · ${BRAND_NAME}`,
   },
   description:
-    'Proper home-style food in Osman Nagar, Tellapur. Less oil, fresh vegetables, ' +
-    'a lunch thali, chai all day, and Mithila specialities you will not find nearby.',
+    'Freshly prepared homestyle Lunch & Dinner delivered across Hyderabad. Ghar ki Thali ' +
+    'from ₹99, Mithila Deluxe Royal, and weekly or monthly subscriptions. ' +
+    `${SHOP.tagline}`,
   keywords: [
-    'home food Tellapur',
-    'thali Osman Nagar',
-    'mess near Tellapur',
-    'Mithila food Hyderabad',
-    'litti chokha Hyderabad',
-    'lunch thali 502300',
+    'homely food Hyderabad',
+    'lunch delivery Gachibowli',
+    'tiffin service Hitech City',
+    'thali delivery Madhapur',
+    'North Indian home food Hyderabad',
+    'monthly meal subscription Hyderabad',
+    'corporate lunch Hyderabad',
+    'Mithila Kitchen',
   ],
   robots: { index: true, follow: true },
   manifest: '/manifest.webmanifest',
@@ -48,7 +71,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html>
+    <html className={`${playfair.variable} ${jakarta.variable}`}>
       <body>
         <Providers>{children}</Providers>
         <ServiceWorkerRegistrar />
