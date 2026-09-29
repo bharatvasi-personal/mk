@@ -133,6 +133,7 @@ function StaffNav() {
     { href: `/${locale}/admin/legal`, label: dict.admin.legal, permission: 'legal:read' },
     { href: `/${locale}/admin/reports`, label: dict.admin.reports, permission: 'report:cost' },
     { href: `/${locale}/admin/menu`, label: dict.admin.menu, permission: 'menu:write' },
+    { href: `/${locale}/admin/import`, label: dict.admin.import, permission: 'inventory:write' },
   ] satisfies { href: string; label: string; permission?: Permission }[]).filter(
     (i) => !i.permission || can(i.permission),
   );

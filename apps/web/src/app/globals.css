@@ -85,3 +85,52 @@ body {
     size: 58mm auto;
   }
 }
+
+/*
+ * Stacked tables below 640px.
+ *
+ * The admin screens are read on a phone at least as often as on a laptop — a manager
+ * checking payables while standing at the counter. A horizontally scrolling eight-column
+ * table is not usable there, so each row becomes a card and each cell carries its column
+ * name, supplied by the Table component as a data-label.
+ */
+@media (max-width: 639px) {
+  table[data-stacked] thead {
+    display: none;
+  }
+
+  table[data-stacked],
+  table[data-stacked] tbody,
+  table[data-stacked] tr,
+  table[data-stacked] td {
+    display: block;
+    width: 100%;
+  }
+
+  table[data-stacked] tr {
+    padding: 0.5rem 0.25rem;
+  }
+
+  table[data-stacked] td {
+    display: grid;
+    grid-template-columns: 8.5rem 1fr;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.3rem 0.75rem;
+  }
+
+  table[data-stacked] td::before {
+    content: attr(data-label);
+    font-size: 0.7rem;
+    line-height: 1.5;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--color-ink-400);
+  }
+
+  /* A cell whose column has no header (a trailing actions column) keeps the full width
+     rather than leaving an empty label gutter. */
+  table[data-stacked] td[data-label=''] {
+    grid-template-columns: 1fr;
+  }
+}

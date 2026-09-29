@@ -4,6 +4,7 @@ import { extractGst, formatMinor, pctBp, roundToRupee, toMinor } from './money';
 import { can, ROLE_PERMISSIONS } from './rbac';
 import { dictionaries } from './i18n';
 import { areCompatible, convertQty, IncompatibleUomError } from './uom';
+import { csvBool, csvDate, csvEnum, csvMoneyMinor, parseCsv, parseCsvLines, toCsv } from './csv';
 
 test('money: paise conversion is exact', () => {
   assert.equal(toMinor(120.5), 12050);
@@ -121,4 +122,80 @@ test('uom: result respects the 4dp precision of the quantity columns', () => {
   // 1 g in kg is 0.001; a third of a gram would exceed what the column can hold.
   assert.equal(convertQty(1, G, KG), '0.001');
   assert.equal(convertQty(0.5, G, KG), '0.0005');
+});
+
+// ─── CSV ─────────────────────────────────────────────────────────────────────
+// These exist because the files this reads will be exported from Excel by someone who
+// has never heard of RFC 4180.
+
+test('csv: quoted fields, embedded commas and doubled quotes', () => {
+  const rows = parseCsvLines('a,b\n"one, two","he said ""hi"""');
+  assert.deepEqual(rows, [
+    ['a', 'b'],
+    ['one, two', 'he said "hi"'],
+  ]);
+});
+
+test('csv: Windows line endings and the BOM Excel adds', () => {
+  const rows = parseCsvLines('\ufeffsku,name\r\nRICE,Sona Masoori\r\n');
+  assert.deepEqual(rows, [
+    ['sku', 'name'],
+    ['RICE', 'Sona Masoori'],
+  ]);
+});
+
+test('csv: newlines inside a quoted field do not end the row', () => {
+  const rows = parseCsvLines('name,notes\nDal,"buy weekly\nfrom kirana"');
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1]?.[1], 'buy weekly\nfrom kirana');
+});
+
+test('csv: headers match regardless of case, spaces or underscores', () => {
+  const result = parseCsv('SKU,Reorder Point\nRICE,5', {
+    required: ['sku', 'reorderPoint'],
+  });
+  assert.deepEqual(result.missingHeaders, []);
+  assert.equal(result.rows[0]?.sku, 'RICE');
+  assert.equal(result.rows[0]?.reorderPoint, '5');
+});
+
+test('csv: missing and unknown headers are reported, not guessed at', () => {
+  const result = parseCsv('sku,colour\nRICE,white', { required: ['sku', 'name'] });
+  assert.deepEqual(result.missingHeaders, ['name']);
+  assert.deepEqual(result.unknownHeaders, ['colour']);
+});
+
+test('csv: blank trailing rows are dropped', () => {
+  const result = parseCsv('sku\nRICE\n\n', { required: ['sku'] });
+  assert.equal(result.rows.length, 1);
+});
+
+test('csv: money is read the way people type it', () => {
+  assert.equal(csvMoneyMinor('120'), 12000);
+  assert.equal(csvMoneyMinor('120.50'), 12050);
+  assert.equal(csvMoneyMinor('₹1,200'), 120000);
+  assert.equal(csvMoneyMinor(''), null);
+  assert.equal(csvMoneyMinor('abc'), null);
+});
+
+test('csv: dates accept the DD/MM/YYYY Indian spreadsheets default to', () => {
+  assert.equal(csvDate('2026-10-15'), '2026-10-15');
+  assert.equal(csvDate('15/10/2026'), '2026-10-15');
+  assert.equal(csvDate('5/1/2026'), '2026-01-05');
+  assert.equal(csvDate('nonsense'), null);
+});
+
+test('csv: booleans and enums are matched loosely', () => {
+  assert.equal(csvBool('yes'), true);
+  assert.equal(csvBool('TRUE'), true);
+  assert.equal(csvBool(''), false);
+  assert.equal(csvEnum('non veg', ['VEG', 'NON_VEG'] as const), 'NON_VEG');
+  assert.equal(csvEnum('vEg', ['VEG', 'NON_VEG'] as const), 'VEG');
+  assert.equal(csvEnum('fish', ['VEG', 'NON_VEG'] as const), null);
+});
+
+test('csv: round-trips through toCsv', () => {
+  const text = toCsv(['name', 'notes'], [['Dal, toor', 'said "buy"']]);
+  const back = parseCsvLines(text);
+  assert.deepEqual(back[1], ['Dal, toor', 'said "buy"']);
 });

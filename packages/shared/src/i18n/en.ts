@@ -152,6 +152,7 @@ export const en = {
     settings: 'Settings',
     audit: 'Audit trail',
     expenses: 'Expenses',
+    import: 'Import data',
   },
   reports: {
     today: 'Today',

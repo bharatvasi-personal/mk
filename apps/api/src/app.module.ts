@@ -15,6 +15,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { BranchesModule } from './modules/branches/branches.module';
 import { ExpensesModule } from './modules/expenses/expenses.module';
 import { HealthModule } from './modules/health/health.module';
+import { ImportsModule } from './modules/imports/imports.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { LegalModule } from './modules/legal/legal.module';
 import { MenuModule } from './modules/menu/menu.module';
@@ -45,6 +46,7 @@ import { JobsModule } from './jobs/jobs.module';
     OrdersModule,
     PaymentsModule,
     InventoryModule,
+    ImportsModule,
     VendorsModule,
     StaffModule,
     AttendanceModule,

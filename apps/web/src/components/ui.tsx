@@ -1,7 +1,7 @@
 'use client';
 
 import { formatMinor } from '@mk/shared';
-import type { ReactNode } from 'react';
+import { Children, cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
@@ -107,10 +107,34 @@ export function Field({
 export const inputClass =
   'w-full rounded-lg border border-ink-200 bg-white px-3 py-2 text-ink-900 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100';
 
+/**
+ * A table that becomes a list of cards on a phone.
+ *
+ * An eight-column table with horizontal scroll is unusable on a handset, and the manager
+ * is on a handset — they are standing in a 12x18 ft shop, not sitting at a desk. Below
+ * `sm` the header row is hidden and each cell renders its column name beside its value,
+ * driven by a `data-label` this component injects into every `<td>`.
+ *
+ * Injecting the label here rather than asking each page to repeat it means the label can
+ * never drift from the header it belongs to, and no calling page had to change.
+ */
 export function Table({ head, children }: { head: string[]; children: ReactNode }) {
+  const withLabels = Children.map(children, (row) => {
+    if (!isValidElement(row)) return row;
+    const rowProps = row.props as { children?: ReactNode };
+    let cellIndex = 0;
+    const cells = Children.map(rowProps.children, (cell) => {
+      if (!isValidElement(cell)) return cell;
+      const label = head[cellIndex] ?? '';
+      cellIndex += 1;
+      return cloneElement(cell as ReactElement<{ 'data-label'?: string }>, { 'data-label': label });
+    });
+    return cloneElement(row as ReactElement<{ children?: ReactNode }>, { children: cells });
+  });
+
   return (
     <div className="overflow-x-auto rounded-xl border border-ink-200 bg-white">
-      <table className="w-full text-sm">
+      <table data-stacked className="w-full text-sm">
         <thead>
           <tr className="border-b border-ink-200 bg-ink-50 text-left text-xs uppercase tracking-wide text-ink-400">
             {head.map((h) => (
@@ -120,7 +144,7 @@ export function Table({ head, children }: { head: string[]; children: ReactNode 
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-ink-100">{children}</tbody>
+        <tbody className="divide-y divide-ink-100">{withLabels}</tbody>
       </table>
     </div>
   );

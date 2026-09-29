@@ -353,6 +353,88 @@ async function main() {
   r = await call('GET', '/vendors/payables/list');
   check('payables list shows what is owed', r.status === 200 && r.body?.length >= 1, `${r.body?.length} open bill(s)`);
 
+  // ── Bulk import ───────────────────────────────────────────────────────────
+  r = await call('GET', '/import/entities');
+  check('import entities are described', Array.isArray(r.body) && r.body.length === 4, r.body?.map((e) => e.entity).join(', '));
+
+  r = await call('GET', '/import/vendors/template');
+  const template = typeof r.body?.raw === 'string' ? r.body.raw : JSON.stringify(r.body);
+  check('a CSV template is downloadable', template.includes('code') && template.includes('creditDays'));
+
+  const stamp = Math.random().toString(36).slice(2, 7).toUpperCase();
+
+  // A file with one good row and one broken one must report the broken one and change
+  // nothing at all.
+  const badCsv = [
+    'code,name,phone,creditDays,category',
+    `IMP-${stamp}-A,Test Traders A,9000090001,10,Groceries`,
+    `IMP-${stamp}-B,,9000090002,999,Groceries`,
+  ].join('\n');
+
+  r = await call('POST', '/import/vendors/preview', { branchId, csv: badCsv });
+  check(
+    'preview reports every bad row without changing anything',
+    r.body?.errorCount === 1 && r.body?.createCount === 1,
+    `${r.body?.createCount} ok, ${r.body?.errorCount} bad`,
+  );
+
+  r = await call('POST', '/import/vendors/commit', { branchId, csv: badCsv });
+  check('a file with errors is refused wholesale', r.status === 400, r.body?.message?.slice(0, 50));
+
+  r = await call('GET', `/vendors?search=IMP-${stamp}`);
+  check('nothing was written from the refused file', (r.body?.length ?? 0) === 0, `${r.body?.length ?? 0} vendors`);
+
+  // The corrected file imports cleanly.
+  const goodCsv = [
+    'Code,Name,Phone,Credit Days,Category',
+    `IMP-${stamp}-A,Test Traders A,9000090001,10,Groceries`,
+    `IMP-${stamp}-B,Test Traders B,9000090002,7,Vegetables`,
+  ].join('\r\n');
+
+  r = await call('POST', '/import/vendors/commit', { branchId, csv: goodCsv });
+  check(
+    'a clean file imports, and loose header names are matched',
+    r.body?.createCount === 2 && r.body?.errorCount === 0,
+    `${r.body?.createCount} created`,
+  );
+
+  r = await call('GET', `/vendors?search=IMP-${stamp}`);
+  check('imported vendors exist with their credit terms', r.body?.length === 2, `${r.body?.[0]?.name}, ${r.body?.[0]?.creditDays}d`);
+
+  // Re-importing the same file updates rather than duplicating — "fix it and send it
+  // again" has to be safe.
+  r = await call('POST', '/import/vendors/commit', { branchId, csv: goodCsv });
+  check('re-importing updates instead of duplicating', r.body?.updateCount === 2 && r.body?.createCount === 0);
+
+  // Menu import, including a price and a Hindi name.
+  const menuCsv = [
+    'category,item,itemHi,variant,mealSlot,price,foodType,isLessOil',
+    `Test Imports,Imported Dish ${stamp},आयातित व्यंजन,Regular,LUNCH,95,VEG,yes`,
+  ].join('\n');
+  r = await call('POST', '/import/menu/commit', { branchId, csv: menuCsv });
+  check('menu import creates a priced item', r.body?.createCount === 1, `${r.body?.createCount} created`);
+
+  r = await call('GET', `/menu/branch/${branchId}?mealSlot=LUNCH`);
+  const importedCat = r.body?.find((c) => c.slug === 'test-imports');
+  check(
+    'the imported dish is priced on the branch menu',
+    importedCat?.items?.[0]?.variants?.[0]?.priceMinor === 9500,
+    `${importedCat?.items?.[0]?.name} at ${money(importedCat?.items?.[0]?.variants?.[0]?.priceMinor ?? 0)}`,
+  );
+
+  // A helper must not be able to bulk-create staff.
+  const ownerTokenForImport = token;
+  r = await call(
+    'POST',
+    '/auth/staff/login',
+    { tenantSlug: TENANT, identifier: 'counter@mithilakitchen.in', password: 'Counter@12345', client: 'POS' },
+    { noAuth: true },
+  );
+  token = r.body?.accessToken;
+  r = await call('POST', '/import/employees/preview', { branchId, csv: 'employeeCode,name,roleType,joinedOn\nX1,X,HELPER,2026-10-01' });
+  check('a helper cannot bulk-import staff', r.status === 403, `status ${r.status}`);
+  token = ownerTokenForImport;
+
   // ── Attendance ────────────────────────────────────────────────────────────
   r = await call('GET', '/staff/employees?branchId=' + branchId);
   const chef = r.body?.find((e) => e.employeeCode === 'E001');

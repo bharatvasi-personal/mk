@@ -155,6 +155,7 @@ exports.hi = {
         settings: 'सेटिंग',
         audit: 'बदलावों का रिकॉर्ड',
         expenses: 'खर्च',
+        import: 'डेटा आयात',
     },
     reports: {
         today: 'आज',

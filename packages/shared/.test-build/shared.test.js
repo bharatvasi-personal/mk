@@ -9,6 +9,7 @@ const money_1 = require("./money");
 const rbac_1 = require("./rbac");
 const i18n_1 = require("./i18n");
 const uom_1 = require("./uom");
+const csv_1 = require("./csv");
 (0, node_test_1.test)('money: paise conversion is exact', () => {
     strict_1.default.equal((0, money_1.toMinor)(120.5), 12050);
     strict_1.default.equal((0, money_1.toMinor)(0.1 + 0.2), 30); // the float trap
@@ -103,4 +104,69 @@ const DOZEN = { code: 'dozen', baseCode: 'pcs', factorToBase: 12 };
     // 1 g in kg is 0.001; a third of a gram would exceed what the column can hold.
     strict_1.default.equal((0, uom_1.convertQty)(1, G, KG), '0.001');
     strict_1.default.equal((0, uom_1.convertQty)(0.5, G, KG), '0.0005');
+});
+// ─── CSV ─────────────────────────────────────────────────────────────────────
+// These exist because the files this reads will be exported from Excel by someone who
+// has never heard of RFC 4180.
+(0, node_test_1.test)('csv: quoted fields, embedded commas and doubled quotes', () => {
+    const rows = (0, csv_1.parseCsvLines)('a,b\n"one, two","he said ""hi"""');
+    strict_1.default.deepEqual(rows, [
+        ['a', 'b'],
+        ['one, two', 'he said "hi"'],
+    ]);
+});
+(0, node_test_1.test)('csv: Windows line endings and the BOM Excel adds', () => {
+    const rows = (0, csv_1.parseCsvLines)('\ufeffsku,name\r\nRICE,Sona Masoori\r\n');
+    strict_1.default.deepEqual(rows, [
+        ['sku', 'name'],
+        ['RICE', 'Sona Masoori'],
+    ]);
+});
+(0, node_test_1.test)('csv: newlines inside a quoted field do not end the row', () => {
+    const rows = (0, csv_1.parseCsvLines)('name,notes\nDal,"buy weekly\nfrom kirana"');
+    strict_1.default.equal(rows.length, 2);
+    strict_1.default.equal(rows[1]?.[1], 'buy weekly\nfrom kirana');
+});
+(0, node_test_1.test)('csv: headers match regardless of case, spaces or underscores', () => {
+    const result = (0, csv_1.parseCsv)('SKU,Reorder Point\nRICE,5', {
+        required: ['sku', 'reorderPoint'],
+    });
+    strict_1.default.deepEqual(result.missingHeaders, []);
+    strict_1.default.equal(result.rows[0]?.sku, 'RICE');
+    strict_1.default.equal(result.rows[0]?.reorderPoint, '5');
+});
+(0, node_test_1.test)('csv: missing and unknown headers are reported, not guessed at', () => {
+    const result = (0, csv_1.parseCsv)('sku,colour\nRICE,white', { required: ['sku', 'name'] });
+    strict_1.default.deepEqual(result.missingHeaders, ['name']);
+    strict_1.default.deepEqual(result.unknownHeaders, ['colour']);
+});
+(0, node_test_1.test)('csv: blank trailing rows are dropped', () => {
+    const result = (0, csv_1.parseCsv)('sku\nRICE\n\n', { required: ['sku'] });
+    strict_1.default.equal(result.rows.length, 1);
+});
+(0, node_test_1.test)('csv: money is read the way people type it', () => {
+    strict_1.default.equal((0, csv_1.csvMoneyMinor)('120'), 12000);
+    strict_1.default.equal((0, csv_1.csvMoneyMinor)('120.50'), 12050);
+    strict_1.default.equal((0, csv_1.csvMoneyMinor)('₹1,200'), 120000);
+    strict_1.default.equal((0, csv_1.csvMoneyMinor)(''), null);
+    strict_1.default.equal((0, csv_1.csvMoneyMinor)('abc'), null);
+});
+(0, node_test_1.test)('csv: dates accept the DD/MM/YYYY Indian spreadsheets default to', () => {
+    strict_1.default.equal((0, csv_1.csvDate)('2026-10-15'), '2026-10-15');
+    strict_1.default.equal((0, csv_1.csvDate)('15/10/2026'), '2026-10-15');
+    strict_1.default.equal((0, csv_1.csvDate)('5/1/2026'), '2026-01-05');
+    strict_1.default.equal((0, csv_1.csvDate)('nonsense'), null);
+});
+(0, node_test_1.test)('csv: booleans and enums are matched loosely', () => {
+    strict_1.default.equal((0, csv_1.csvBool)('yes'), true);
+    strict_1.default.equal((0, csv_1.csvBool)('TRUE'), true);
+    strict_1.default.equal((0, csv_1.csvBool)(''), false);
+    strict_1.default.equal((0, csv_1.csvEnum)('non veg', ['VEG', 'NON_VEG']), 'NON_VEG');
+    strict_1.default.equal((0, csv_1.csvEnum)('vEg', ['VEG', 'NON_VEG']), 'VEG');
+    strict_1.default.equal((0, csv_1.csvEnum)('fish', ['VEG', 'NON_VEG']), null);
+});
+(0, node_test_1.test)('csv: round-trips through toCsv', () => {
+    const text = (0, csv_1.toCsv)(['name', 'notes'], [['Dal, toor', 'said "buy"']]);
+    const back = (0, csv_1.parseCsvLines)(text);
+    strict_1.default.deepEqual(back[1], ['Dal, toor', 'said "buy"']);
 });

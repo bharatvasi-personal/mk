@@ -156,6 +156,7 @@ export const te: Dictionary = {
     settings: 'సెట్టింగ్‌లు',
     audit: 'మార్పుల రికార్డు',
     expenses: 'ఖర్చులు',
+    import: 'డేటా దిగుమతి',
   },
   reports: {
     today: 'ఈ రోజు',
