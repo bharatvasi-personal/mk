@@ -293,10 +293,22 @@ async function main() {
   // ── Attendance ────────────────────────────────────────────────────────────
   r = await call('GET', '/staff/employees?branchId=' + branchId);
   const chef = r.body?.find((e) => e.employeeCode === 'E001');
-  // Paired in/out is checked on a different employee from the NFC test, so a leftover
-  // open punch from an earlier run cannot make the day ambiguous.
-  const helper = r.body?.find((e) => e.employeeCode === 'E002');
-  check('employee records', r.status === 200 && !!chef && !!helper, `${r.body?.length} staff`);
+  check('employee records', r.status === 200 && !!chef, `${r.body?.length} staff`);
+
+  // Paired in/out is checked on an employee this run creates. Re-running against the same
+  // database would otherwise stack two punch-ins on one day — which the system correctly
+  // flags for review, but which says nothing about whether the pairing logic works.
+  const tempCode = `T${Date.now().toString(36).toUpperCase().slice(-6)}`;
+  r = await call('POST', '/staff/employees', {
+    branchId,
+    employeeCode: tempCode,
+    name: `Smoke Test ${tempCode}`,
+    roleType: 'HELPER',
+    employmentType: 'DAILY_WAGE',
+    joinedOn: new Date().toISOString().slice(0, 10),
+  });
+  const helper = r.body;
+  check('create an employee', r.status === 201 && !!helper?.id, tempCode);
 
   const inAt = new Date(Date.now() - 6 * 3600_000).toISOString();
   r = await call('POST', '/attendance/punch', {
@@ -433,6 +445,31 @@ async function main() {
   if (r.body?.id) await call('POST', '/orders/cancel', { orderId: r.body.id, reason: 'smoke test cleanup' }).catch(() => {});
 
   token = ownerToken;
+
+  // ── Quick bill: the POS's primary operation ───────────────────────────────
+  const quickRef = uuid();
+  const quickBody = {
+    branchId,
+    clientRef: quickRef,
+    channel: 'TAKEAWAY',
+    mealSlot: 'LUNCH',
+    items: [{ variantId: regular.variantId, qty: 1 }],
+    discountMinor: 0,
+    tenders: [{ tender: 'CASH', amountMinor: 10000, tenderedMinor: 10000 }],
+    roundOff: true,
+    sendToKitchen: true,
+  };
+  r = await call('POST', '/orders/quick-bill', quickBody, { idempotencyKey: uuid() });
+  check(
+    'quick-bill creates, cuts a KOT and settles in one call',
+    (r.status === 201 || r.status === 200) && r.body?.order?.status === 'SETTLED',
+    `invoice ${r.body?.invoice?.invoiceNo}`,
+  );
+  check('quick-bill returns a printable bill', Array.isArray(r.body?.bill?.lines), `${r.body?.bill?.lines?.length} line(s)`);
+
+  // Replaying a settled quick-bill must return the existing bill, not charge again.
+  r = await call('POST', '/orders/quick-bill', quickBody, { idempotencyKey: uuid() });
+  check('replayed quick-bill returns the original bill', r.body?.replayed === true, `replayed=${r.body?.replayed}`);
 
   // ── Payments ──────────────────────────────────────────────────────────────
   r = await call('GET', '/payments/status', null, { noAuth: true });

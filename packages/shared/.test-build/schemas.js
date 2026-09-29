@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.kitchenTicketQuerySchema = exports.reportRangeSchema = exports.expenseSchema = exports.legalDocumentSchema = exports.salaryAdvanceSchema = exports.payrollRunSchema = exports.correctAttendanceSchema = exports.punchSchema = exports.shiftAssignmentSchema = exports.shiftSchema = exports.salaryStructureSchema = exports.employeeSchema = exports.vendorPaymentSchema = exports.goodsReceiptSchema = exports.purchaseOrderSchema = exports.vendorSchema = exports.stockCountSchema = exports.recipeSchema = exports.stockMovementSchema = exports.branchStockPolicySchema = exports.inventoryItemSchema = exports.paymentIntentSchema = exports.publicOrderSchema = exports.closeCashSessionSchema = exports.openCashSessionSchema = exports.updateOrderStatusSchema = exports.cancelOrderSchema = exports.voidOrderItemSchema = exports.settleOrderSchema = exports.tenderSchema = exports.createOrderSchema = exports.orderLineInputSchema = exports.setSoldOutSchema = exports.branchMenuPriceSchema = exports.menuItemSchema = exports.menuCategorySchema = exports.changePasswordSchema = exports.refreshSchema = exports.verifyOtpSchema = exports.requestOtpSchema = exports.staffLoginSchema = exports.paginationSchema = exports.dateOnly = exports.i18nText = exports.localeCode = exports.qty = exports.minor = exports.phone = exports.uuid = void 0;
+exports.kitchenTicketQuerySchema = exports.reportRangeSchema = exports.expenseSchema = exports.legalDocumentSchema = exports.salaryAdvanceSchema = exports.payrollRunSchema = exports.correctAttendanceSchema = exports.punchSchema = exports.shiftAssignmentSchema = exports.shiftSchema = exports.salaryStructureSchema = exports.employeeSchema = exports.vendorPaymentSchema = exports.goodsReceiptSchema = exports.purchaseOrderSchema = exports.vendorSchema = exports.stockCountSchema = exports.recipeSchema = exports.stockMovementSchema = exports.branchStockPolicySchema = exports.inventoryItemSchema = exports.paymentIntentSchema = exports.publicOrderSchema = exports.closeCashSessionSchema = exports.openCashSessionSchema = exports.updateOrderStatusSchema = exports.cancelOrderSchema = exports.voidOrderItemSchema = exports.quickBillSchema = exports.settleOrderSchema = exports.tenderSchema = exports.createOrderSchema = exports.orderLineInputSchema = exports.setSoldOutSchema = exports.branchMenuPriceSchema = exports.menuItemSchema = exports.menuCategorySchema = exports.changePasswordSchema = exports.refreshSchema = exports.verifyOtpSchema = exports.requestOtpSchema = exports.staffLoginSchema = exports.paginationSchema = exports.dateOnly = exports.i18nText = exports.localeCode = exports.qty = exports.minor = exports.phone = exports.uuid = void 0;
 /**
  * Wire contracts, as Zod objects.
  *
@@ -145,6 +145,34 @@ exports.settleOrderSchema = zod_1.z
     tenders: zod_1.z.array(exports.tenderSchema).min(1),
     roundOff: zod_1.z.boolean().default(true),
     printBill: zod_1.z.boolean().default(true),
+})
+    .superRefine((v, ctx) => {
+    for (const t of v.tenders) {
+        if (t.tender === 'UPI_MANUAL' && !t.reference) {
+            ctx.addIssue({
+                code: zod_1.z.ZodIssueCode.custom,
+                path: ['tenders'],
+                message: 'A UPI reference (UTR) is required so the bank statement can be reconciled',
+            });
+        }
+    }
+});
+/**
+ * Create and settle in one call.
+ *
+ * This is the POS's primary primitive, not a shortcut: at a thali counter the customer
+ * orders and pays in the same breath, and a two-round-trip flow doubles the number of
+ * ways a dropped connection can leave a half-finished bill. It is also what makes the
+ * offline queue tractable — one idempotent operation to replay instead of an ordered
+ * pair where the second needs an id the first has not returned yet.
+ *
+ * Dine-in customers who pay after eating still use the two-step flow.
+ */
+exports.quickBillSchema = exports.createOrderSchema
+    .extend({
+    tenders: zod_1.z.array(exports.tenderSchema).min(1),
+    roundOff: zod_1.z.boolean().default(true),
+    sendToKitchen: zod_1.z.boolean().default(true),
 })
     .superRefine((v, ctx) => {
     for (const t of v.tenders) {
