@@ -11,6 +11,7 @@ import {
 import { z } from 'zod';
 import { loadConfig } from '../../config/configuration';
 import { CurrentActor, Public } from '../../common/auth/decorators';
+import { RateLimit } from '../../common/throttle/rate-limit.guard';
 import { zodBody } from '../../common/http/zod-validation.pipe';
 import type { RequestActor } from '../../common/tenant/tenant-context';
 import { AuthService } from './auth.service';
@@ -31,6 +32,7 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Public()
+  @RateLimit({ limit: 10, windowSeconds: 60 })
   @Post('staff/login')
   @HttpCode(200)
   @ApiOperation({ summary: 'Staff sign in with password (and TOTP if enabled)' })
@@ -43,6 +45,7 @@ export class AuthController {
   }
 
   @Public()
+  @RateLimit({ limit: 5, windowSeconds: 300 })
   @Post('customer/otp/request')
   @HttpCode(200)
   @ApiOperation({ summary: 'Send a login code to a customer phone' })
@@ -51,6 +54,7 @@ export class AuthController {
   }
 
   @Public()
+  @RateLimit({ limit: 15, windowSeconds: 300 })
   @Post('customer/otp/verify')
   @HttpCode(200)
   async verifyOtp(
@@ -62,6 +66,7 @@ export class AuthController {
   }
 
   @Public()
+  @RateLimit({ limit: 30, windowSeconds: 60 })
   @Post('refresh')
   @HttpCode(200)
   async refresh(

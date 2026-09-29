@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 import { getDictionary, pickI18n, formatMinor } from '@mk/shared';
 import { SiteFooter, SiteHeader, WhatsAppCta } from '@/components/site-chrome';
+import { ThaliIllustration } from '@/components/thali-illustration';
 import { BRAND_NAME, SHOP } from '@/lib/config';
 import { serverGet, type PublicBranch, type PublicMenuCategory } from '@/lib/server-api';
 import { resolveLocale } from '@/lib/i18n';
@@ -66,7 +67,8 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
 
       <main>
         <section className="bg-gradient-to-b from-brand-50 to-ink-50">
-          <div className="mx-auto max-w-5xl px-4 py-14 sm:py-20">
+          <div className="mx-auto grid max-w-5xl items-center gap-10 px-4 py-14 sm:py-20 lg:grid-cols-[1.2fr_1fr]">
+            <div>
             <p className="mb-3 text-sm font-medium uppercase tracking-widest text-brand-600">
               {branch?.name ?? 'Osman Nagar'} · Tellapur
             </p>
@@ -101,6 +103,11 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
                 })}
               </p>
             ) : null}
+            </div>
+
+            <div className="mx-auto w-full max-w-xs lg:max-w-sm">
+              <ThaliIllustration className="w-full drop-shadow-sm" />
+            </div>
           </div>
         </section>
 

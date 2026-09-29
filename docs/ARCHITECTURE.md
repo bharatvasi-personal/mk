@@ -25,9 +25,9 @@ One Next.js application, three route groups:
 
 | Route group | Audience | Rendering |
 |---|---|---|
-| `(public)` | Customers, Google | Static / ISR. SEO matters — "home food Tellapur" is the acquisition channel. |
-| `(pos)` | Counter staff | Client-side PWA, service worker, IndexedDB queue. Installed to the tablet home screen. |
-| `(admin)` | Partners, manager | Client-side dashboard, server components for initial data. |
+| `(public)` | Customers, Google | Static / ISR. SEO matters — "home food Tellapur" is the acquisition channel, and the link gets pasted into WhatsApp groups, so there is a generated Open Graph card per locale. |
+| `(pos)` | Counter staff | Installable PWA: a manifest, a service worker holding the app shell, an IndexedDB write queue and a localStorage menu cache. The shell survives a reload with no network, which is what a power cut looks like. API responses are **never** cached — a stale bill total is worse than an error, because an error is visible. |
+| `(admin)` | Partners, manager | Client-side dashboard, server components for initial data. Tables stack into labelled cards below 640px; the manager is on a phone, standing in the shop. |
 
 **Why one app, not three:** shared i18n dictionaries, shared design system, one deploy, one TLS cert.
 The route groups have separate layouts and separate middleware rules, so they behave as three products.
@@ -199,6 +199,14 @@ legal or access-control table: actor, IP, entity, action, before/after JSON diff
 is append-only (a trigger rejects `UPDATE`/`DELETE`). This is both a legal requirement and the only way
 to settle a dispute between partners about who changed a price.
 
+**Rate limiting.** A fixed-window limiter guards the endpoints worth protecting — password login above
+all, because Argon2 is deliberately expensive to compute and an unthrottled login is therefore a way to
+burn the CPU the POS needs at lunchtime. Keyed on IP *and* identifier, so a whole shop behind one NAT
+address is not locked out when one person mistypes a password. It is in-process: the deployment is a
+single API container, and a shared store would add a Redis round trip to every login for no extra
+protection today. **A second API replica must move this to Redis** — the note is in the guard itself,
+where the person adding that replica will read it.
+
 **Idempotency.** Every unsafe POS/mobile endpoint accepts `Idempotency-Key`. The key plus a hash of the
 request body is stored in Redis for 24 h with the first response; a replay returns the stored response.
 This is what makes the offline queue safe to retry blindly.
@@ -207,10 +215,23 @@ This is what makes the offline queue safe to retry blindly.
 referencing the original. Stock is an append-only `StockLedgerEntry`; on-hand quantity is the sum of the
 ledger (with a periodically refreshed snapshot for speed), never a mutable counter that can drift.
 
-**Observability.** Pino structured JSON logs with a request id propagated from Caddy; `/health/live` and
-`/health/ready`; Prometheus metrics at `/metrics`; optional Grafana + Loki + Prometheus profile in the
-Compose file, off by default to save RAM. Uptime Kuma (self-hosted, free) pings the public site and the
-API health endpoint and alerts the partners' WhatsApp/Telegram.
+**Observability.** Structured JSON logs with a request id propagated from Caddy; `/health/live` (is the
+process up — restart it) and `/health/ready` (can it serve — take it out of rotation, but do not restart:
+a briefly unreachable database is not fixed by killing the app).
+
+`/metrics` exposes Prometheus text, hand-written rather than via a client library, because what is worth
+scraping here is small and specific. The business gauges are the point: process memory tells you the
+container is alive, whereas `mk_orders_settled_last_hour = 0` at 1 pm tells you the counter has stopped,
+which is the thing worth waking someone for. It also carries `mk_attendance_needs_review`,
+`mk_legal_documents_expired` and `mk_payables_overdue_paise` — operational debts that are invisible until
+they are urgent.
+
+The scrape reads through a `SECURITY DEFINER` function returning **aggregate counts only**, because a
+scrape has no tenant and RLS would otherwise correctly hide every row and report a busy shop as a dead
+one. No row, name or identifier crosses that boundary.
+
+Uptime Kuma (self-hosted, free) pings the public site and `/health/ready` and alerts the partners over
+Telegram/WhatsApp.
 
 **Secrets.** Never in git. `.env` on the box is `chmod 600` and rendered by Terraform from variables;
 CI secrets live in GitHub Actions secrets. The app reads config through a validated Zod schema at boot

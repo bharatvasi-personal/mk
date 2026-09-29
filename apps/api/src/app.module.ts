@@ -8,6 +8,7 @@ import { AllExceptionsFilter } from './common/http/all-exceptions.filter';
 import { ContextMiddleware } from './common/http/context.middleware';
 import { IdempotencyInterceptor } from './common/idempotency/idempotency.interceptor';
 import { NotificationModule } from './common/notifications/notification.module';
+import { RateLimitGuard } from './common/throttle/rate-limit.guard';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { StorageModule } from './common/storage/storage.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
@@ -60,6 +61,9 @@ import { JobsModule } from './jobs/jobs.module';
   providers: [
     TokenService,
     IdempotencyInterceptor,
+    // Order matters: throttle before authenticating, so a flood of bad passwords is
+    // rejected without paying for an Argon2 verification each time.
+    { provide: APP_GUARD, useClass: RateLimitGuard },
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
   ],

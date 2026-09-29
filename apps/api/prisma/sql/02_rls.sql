@@ -96,3 +96,56 @@ REVOKE ALL ON FUNCTION public.list_active_tenants() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.resolve_tenant_by_slug(text) TO mk_app;
 GRANT EXECUTE ON FUNCTION public.resolve_tenant_by_gateway_order(text, text) TO mk_app;
 GRANT EXECUTE ON FUNCTION public.list_active_tenants() TO mk_app;
+
+-- Platform metrics.
+--
+-- A Prometheus scrape has no tenant, and row-level security correctly hides every
+-- tenant-owned row from a connection that has not declared one — so a naive metrics
+-- query returns zeroes and looks like a dead shop.
+--
+-- This returns AGGREGATE COUNTS ONLY across all tenants. No row, name, amount or
+-- identifier crosses the boundary, so an operator scraping it learns how busy the
+-- platform is and nothing about anyone's business.
+CREATE OR REPLACE FUNCTION public.platform_metrics()
+RETURNS TABLE (
+  orders_last_hour bigint,
+  orders_today bigint,
+  revenue_today_minor bigint,
+  queued_notifications bigint,
+  failed_notifications bigint,
+  open_cash_sessions bigint,
+  attendance_needs_review bigint,
+  expired_documents bigint,
+  overdue_payables_minor bigint,
+  active_tenants bigint,
+  active_branches bigint
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+STABLE
+AS $$
+  SELECT
+    (SELECT COUNT(*) FROM orders
+       WHERE status = 'SETTLED' AND settled_at > now() - interval '1 hour'),
+    (SELECT COUNT(*) FROM orders
+       WHERE status = 'SETTLED'
+         AND (settled_at AT TIME ZONE 'Asia/Kolkata')::date
+             = (now() AT TIME ZONE 'Asia/Kolkata')::date),
+    (SELECT COALESCE(SUM(total_minor), 0)::bigint FROM orders
+       WHERE status = 'SETTLED'
+         AND (settled_at AT TIME ZONE 'Asia/Kolkata')::date
+             = (now() AT TIME ZONE 'Asia/Kolkata')::date),
+    (SELECT COUNT(*) FROM notification_outbox WHERE status = 'PENDING'),
+    (SELECT COUNT(*) FROM notification_outbox WHERE status = 'FAILED'),
+    (SELECT COUNT(*) FROM cash_sessions WHERE closed_at IS NULL),
+    (SELECT COUNT(*) FROM attendance_days WHERE status = 'NEEDS_REVIEW'),
+    (SELECT COUNT(*) FROM legal_documents WHERE expires_on < CURRENT_DATE AND NOT is_archived),
+    (SELECT COALESCE(SUM(total_minor - paid_minor), 0)::bigint FROM vendor_invoices
+       WHERE status NOT IN ('PAID','CANCELLED') AND due_on < CURRENT_DATE),
+    (SELECT COUNT(*) FROM tenants WHERE is_active),
+    (SELECT COUNT(*) FROM branches WHERE is_active);
+$$;
+
+REVOKE ALL ON FUNCTION public.platform_metrics() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.platform_metrics() TO mk_app;

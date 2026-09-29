@@ -6,6 +6,7 @@ import type { PublicMenuCategory } from '@/lib/server-api';
 import { useDict, useLocale } from '@/lib/dict';
 import { useCart } from '@/lib/cart';
 import { Badge, Button } from './ui';
+import { DishMark } from './thali-illustration';
 
 const SLOT_ORDER = ['LUNCH', 'CHAI', 'EVENING', 'ALL_DAY'] as const;
 
@@ -93,13 +94,19 @@ export function MenuList({
                   className="rounded-xl border border-ink-200 bg-white p-4 transition-shadow hover:shadow-sm"
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div>
+                    <div className="flex min-w-0 items-start gap-3">
+                      {/* Stands in for a photograph. Derived from the dish name, so the
+                          same dish always carries the same mark and a long menu is
+                          scannable. Swap for real photos once there are any. */}
+                      <DishMark seed={item.slug} foodType={item.foodType} />
+                      <div className="min-w-0">
                       <h3 className="font-medium text-ink-900">{pickI18n(item.name, item.nameI18n, locale)}</h3>
                       {item.description ? (
                         <p className="mt-1 text-sm text-ink-600">
                           {pickI18n(item.description, item.descriptionI18n, locale)}
                         </p>
                       ) : null}
+                      </div>
                     </div>
                     <FoodTypeDot type={item.foodType} label={dict.menu[item.foodType === 'VEG' ? 'veg' : item.foodType === 'NON_VEG' ? 'nonVeg' : item.foodType === 'EGG' ? 'egg' : 'jain']} />
                   </div>

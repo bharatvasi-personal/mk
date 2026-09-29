@@ -627,6 +627,34 @@ async function main() {
   });
   check('forged webhook signature is rejected', r.status === 400, `status ${r.status}`);
 
+  // ── Operations ────────────────────────────────────────────────────────────
+  // /metrics reads through a SECURITY DEFINER aggregate because a scrape has no tenant.
+  // Without that, RLS hides every row and a busy shop reports as a dead one — which is
+  // exactly the alert nobody wants to be woken by.
+  let raw = await fetch(`${BASE}/metrics`, { headers: { 'X-Tenant': TENANT } });
+  const metrics = await raw.text();
+  check('metrics are exposed without auth for scraping', raw.status === 200, `${metrics.split('\n').length} lines`);
+  check('metrics report business numbers, not zeroes behind RLS', /mk_orders_settled_today [1-9]/.test(metrics), metrics.match(/mk_orders_settled_today \d+/)?.[0]);
+  check('metrics include database liveness', metrics.includes('mk_database_up 1'));
+
+  // Rate limiting on the expensive endpoint. Argon2 is deliberately slow, which is what
+  // makes an unthrottled login a way to burn the CPU the counter needs at lunchtime.
+  let throttled = 0;
+  for (let i = 0; i < 12; i += 1) {
+    const attempt = await fetch(`${BASE}/auth/staff/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Tenant': TENANT },
+      body: JSON.stringify({
+        tenantSlug: TENANT,
+        identifier: `spray-${Date.now()}@example.com`,
+        password: 'wrong-password-here',
+        client: 'WEB',
+      }),
+    });
+    if (attempt.status === 429) throttled += 1;
+  }
+  check('password spraying is rate limited', throttled > 0, `${throttled} of 12 rejected with 429`);
+
   // ── Summary ───────────────────────────────────────────────────────────────
   const failed = results.filter((x) => !x.ok);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);

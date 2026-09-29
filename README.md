@@ -67,10 +67,17 @@ has a `FORCE`d row-level-security policy keyed on a transaction-local setting, a
 connects as a role with neither `SUPERUSER` nor `BYPASSRLS`. A forgotten filter returns
 zero rows, not someone else's data. CI fails if any table with a `tenant_id` lacks a policy.
 
-**The POS works offline.** Bills are written to IndexedDB with a client-generated UUID and
-replayed with an `Idempotency-Key`; the server keys on both, so a blind retry returns the
-original bill rather than charging twice. Osman Nagar will lose power and 4G, and the
-counter cannot stop.
+**The POS works offline, shell and all.** It installs to a tablet home screen as a PWA. A
+service worker holds the app shell so a reload during a power cut still opens the counter;
+bills are written to IndexedDB with a client-generated UUID and replayed with an
+`Idempotency-Key`, and the server keys on both, so a blind retry returns the original bill
+rather than charging twice. API responses are never cached — a stale bill total is worse
+than an error, because an error is visible.
+
+**Units are converted, never assumed.** A recipe written in grams against an item stocked
+in kilograms converts; an impossible conversion (litres to kilograms) is refused at
+recipe-save time rather than guessed at. This is the difference between a paneer line
+costing ₹61.20 and ₹61,200.
 
 **Settled bills are immutable.** Corrections are credit notes. Stock is an append-only
 ledger, not a mutable counter. Attendance punches are immutable evidence; the *day* is the
@@ -102,12 +109,24 @@ ever stored.
    have something to fire on. FSSAI, trade licence and shop & establishment are annual, and
    the failure mode is a sealed shop.
 
+## Getting data in
+
+Typing thirty inventory items by hand the week before opening is how mistakes get made.
+**Back office → Import data** takes a CSV for inventory, menu and prices, vendors or staff:
+download the template, fill it in, upload, see exactly what will happen, then commit. The
+file either lands completely or not at all, and re-uploading a corrected file updates
+rather than duplicates.
+
 ## Testing
 
 ```bash
-make check      # typecheck + unit tests (money maths, RBAC, i18n key parity)
-make test-e2e   # 53 assertions against a running API: POS flow, RLS, immutability, webhooks
+make check      # typecheck + unit tests (money, UoM conversion, RBAC, CSV, i18n parity)
+make test-e2e   # 78 assertions against a running API
 ```
+
+The end-to-end suite covers the POS flow, tenant isolation, immutability, gapless document
+numbering, unit conversion, bulk import, permission boundaries, forged payment webhooks,
+metrics and rate limiting.
 
 ## Licence
 
