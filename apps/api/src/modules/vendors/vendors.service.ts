@@ -336,8 +336,16 @@ export class VendorsService {
     });
   }
 
+  /**
+   * What is owed to each vendor, and how much of it is late.
+   *
+   * The sums come back from Postgres as BigInt, which `JSON.stringify` refuses outright —
+   * the endpoint used to 500 with "Do not know how to serialize a BigInt" rather than
+   * returning the money. Narrowed to Number here rather than left for the serialiser:
+   * these are paise, and Number holds paise exactly up to about ₹90,000 crore.
+   */
   async vendorBalances() {
-    return this.db.run((tx) =>
+    const rows = await this.db.run((tx) =>
       tx.$queryRaw<
         {
           vendor_id: string;
@@ -352,6 +360,14 @@ export class VendorsService {
         WHERE outstanding_minor > 0
         ORDER BY overdue_minor DESC, next_due_on ASC NULLS LAST`,
     );
+
+    return rows.map((r) => ({
+      ...r,
+      outstandingMinor: Number(r.outstanding_minor),
+      overdueMinor: Number(r.overdue_minor),
+      outstanding_minor: Number(r.outstanding_minor),
+      overdue_minor: Number(r.overdue_minor),
+    }));
   }
 
   /**

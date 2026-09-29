@@ -351,18 +351,78 @@ export class ReportsService {
     });
   }
 
-  async auditTrail(opts: { entity?: string; entityId?: string; userId?: string; limit?: number }) {
-    return this.db.run((tx) =>
-      tx.auditLog.findMany({
-        where: {
-          ...(opts.entity ? { entity: opts.entity } : {}),
-          ...(opts.entityId ? { entityId: opts.entityId } : {}),
-          ...(opts.userId ? { userId: opts.userId } : {}),
-        },
-        orderBy: { createdAt: 'desc' },
-        take: opts.limit ?? 200,
-      }),
-    );
+  /**
+   * The audit trail, filtered the way someone actually arrives at it.
+   *
+   * Nobody opens this screen wanting "the last 200 events". They arrive holding a
+   * question — who voided that bill on Tuesday, who changed the thali price, who
+   * downloaded the FSSAI licence — so the filters are a date range, an action, a branch
+   * and a person, and the actor's name is joined in rather than left as a UUID that means
+   * nothing to the partner reading it.
+   *
+   * Paged, because the alternative on a busy month is a screen that quietly stops at 200
+   * rows and lets someone conclude an event never happened.
+   */
+  async auditTrail(opts: {
+    entity?: string;
+    entityId?: string;
+    userId?: string;
+    action?: string;
+    branchId?: string;
+    from?: string;
+    to?: string;
+    page?: number;
+  }) {
+    const pageSize = 50;
+    const page = Math.max(1, opts.page ?? 1);
+
+    const where = {
+      ...(opts.entity ? { entity: opts.entity } : {}),
+      ...(opts.entityId ? { entityId: opts.entityId } : {}),
+      ...(opts.userId ? { userId: opts.userId } : {}),
+      ...(opts.action ? { action: opts.action } : {}),
+      ...(opts.branchId ? { branchId: opts.branchId } : {}),
+      ...(opts.from || opts.to
+        ? {
+            createdAt: {
+              ...(opts.from ? { gte: new Date(`${opts.from}T00:00:00.000Z`) } : {}),
+              // Exclusive upper bound one day on, so a range of 1st–1st contains the 1st.
+              ...(opts.to
+                ? { lt: new Date(new Date(`${opts.to}T00:00:00.000Z`).getTime() + 86_400_000) }
+                : {}),
+            },
+          }
+        : {}),
+    };
+
+    return this.db.run(async (tx) => {
+      const [total, rows] = await Promise.all([
+        tx.auditLog.count({ where }),
+        tx.auditLog.findMany({
+          where,
+          include: { user: { select: { name: true, email: true } } },
+          orderBy: { createdAt: 'desc' },
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+      ]);
+
+      // The distinct action and entity lists drive the filter dropdowns. Derived rather
+      // than hard-coded so a new audited action appears in the filter the day it ships.
+      const [actions, entities] = await Promise.all([
+        tx.auditLog.findMany({ distinct: ['action'], select: { action: true }, orderBy: { action: 'asc' } }),
+        tx.auditLog.findMany({ distinct: ['entity'], select: { entity: true }, orderBy: { entity: 'asc' } }),
+      ]);
+
+      return {
+        total,
+        page,
+        pageSize,
+        rows,
+        actions: actions.map((a) => a.action),
+        entities: entities.map((e) => e.entity),
+      };
+    });
   }
 }
 

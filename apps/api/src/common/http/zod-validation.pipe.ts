@@ -26,3 +26,13 @@ export class ZodValidationPipe<T> implements PipeTransform<unknown, T> {
 
 /** `@Body(zodBody(createOrderSchema))` reads better than instantiating the pipe inline. */
 export const zodBody = <T>(schema: ZodSchema<T>) => new ZodValidationPipe(schema);
+
+/**
+ * `@Query(zodQuery(schema))` — the same treatment for query strings.
+ *
+ * Added because a required `?from=` that simply was not sent produced
+ * `new Date(undefined)` deep inside a Prisma call and came back as a 500 "Something went
+ * wrong". A missing parameter is the caller's mistake and should say so: the difference
+ * between a 400 naming the field and a 500 is an hour of reading server logs.
+ */
+export const zodQuery = <T>(schema: ZodSchema<T>) => new ZodValidationPipe(schema);

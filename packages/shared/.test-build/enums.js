@@ -196,20 +196,27 @@ exports.RENEWABLE_DOCUMENT_CATEGORIES = [
     'POLLUTION_NOC',
     'RENT_AGREEMENT',
 ];
+/**
+ * The business serves lunch and dinner. `EVENING` is the dinner service — the enum value
+ * is kept because orders, prices and reports already reference it, and renaming a value
+ * every historical row carries would buy nothing but a migration.
+ */
 exports.MEAL_SLOT_LABELS = {
-    LUNCH: 'Lunch — Thali',
-    CHAI: 'Chai & Snacks',
-    EVENING: 'Evening — Chinese',
-    ALL_DAY: 'All Day',
+    LUNCH: 'Lunch',
+    CHAI: 'All day',
+    EVENING: 'Dinner',
+    ALL_DAY: 'All day',
 };
 /**
  * Default slot for a given local hour. Used to preselect the POS slot so staff do
  * not have to think at 1 pm. Editable by the operator.
  */
 function slotForHour(hour) {
-    if (hour >= 11 && hour < 16)
+    // Lunch service runs to 3 pm and dinner from 7; the gap defaults to lunch because
+    // that is when the day's remaining thalis are still being sold.
+    if (hour >= 10 && hour < 18)
         return 'LUNCH';
-    if (hour >= 17 && hour < 23)
+    if (hour >= 18 && hour < 23)
         return 'EVENING';
-    return 'CHAI';
+    return 'ALL_DAY';
 }

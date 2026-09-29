@@ -71,6 +71,12 @@ export class AttendanceController {
 
   // ─── Hardware readiness (unused at launch, wired for phase 3) ─────────────
 
+  @Get('devices/:branchId')
+  @RequirePermissions('attendance:device:manage')
+  devices(@Param('branchId') branchId: string) {
+    return this.attendance.listDevices(branchId);
+  }
+
   @Post('devices')
   @RequirePermissions('attendance:device:manage')
   @ApiOperation({ summary: 'Register a punch device. Returns its shared secret once.' })

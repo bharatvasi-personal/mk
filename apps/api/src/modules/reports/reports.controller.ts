@@ -3,9 +3,15 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { reportRangeSchema } from '@mk/shared';
 import { z } from 'zod';
 import { CurrentActor, RequirePermissions } from '../../common/auth/decorators';
-import { zodBody } from '../../common/http/zod-validation.pipe';
+import { zodBody, zodQuery } from '../../common/http/zod-validation.pipe';
 import type { RequestActor } from '../../common/tenant/tenant-context';
 import { ReportsService } from './reports.service';
+
+/** Both range reports need real dates; without this a missing one reached Prisma as `new Date(undefined)`. */
+const dateRangeQuery = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD'),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD'),
+});
 
 @ApiTags('reports')
 @Controller('reports')
@@ -35,15 +41,15 @@ export class ReportsController {
   @Get('branches')
   @RequirePermissions('report:consolidated')
   @ApiOperation({ summary: 'Branch-vs-branch comparison with contribution and cost ratios' })
-  branches(@Query('from') from: string, @Query('to') to: string) {
-    return this.reports.branchComparison(from, to);
+  branches(@Query(zodQuery(dateRangeQuery)) q: { from: string; to: string }) {
+    return this.reports.branchComparison(q.from, q.to);
   }
 
   @Get('break-even/:branchId')
   @RequirePermissions('report:cost')
   @ApiOperation({ summary: 'How many orders a day just to cover fixed costs' })
-  breakEven(@Param('branchId') branchId: string, @Query('from') from: string, @Query('to') to: string) {
-    return this.reports.breakEven(branchId, from, to);
+  breakEven(@Param('branchId') branchId: string, @Query(zodQuery(dateRangeQuery)) q: { from: string; to: string }) {
+    return this.reports.breakEven(branchId, q.from, q.to);
   }
 
   @Post('rollup/:branchId')
@@ -70,7 +76,21 @@ export class ReportsController {
     @Query('entity') entity?: string,
     @Query('entityId') entityId?: string,
     @Query('userId') userId?: string,
+    @Query('action') action?: string,
+    @Query('branchId') branchId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('page') page?: string,
   ) {
-    return this.reports.auditTrail({ entity, entityId, userId });
+    return this.reports.auditTrail({
+      entity,
+      entityId,
+      userId,
+      action,
+      branchId,
+      from,
+      to,
+      page: page ? Number(page) : undefined,
+    });
   }
 }

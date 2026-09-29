@@ -6,6 +6,20 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { loadConfig } from './config/configuration';
 
+/**
+ * Postgres counts and sums arrive from `$queryRaw` as BigInt, and `JSON.stringify` throws
+ * on one outright — which surfaced as a bare 500 "Something went wrong" on the vendor
+ * balances endpoint, with the cause only visible in the server log. Sixteen raw queries in
+ * this codebase can return one, so the serialiser is taught the rule once rather than each
+ * of them remembering to cast.
+ *
+ * Emitted as a Number, not a string: every BigInt here is paise or a row count, and Number
+ * holds paise exactly to about ₹90,000 crore.
+ */
+(BigInt.prototype as unknown as { toJSON(): number }).toJSON = function toJSON(this: bigint) {
+  return Number(this);
+};
+
 async function bootstrap(): Promise<void> {
   const cfg = loadConfig();
   const logger = new Logger('Bootstrap');
@@ -34,6 +48,12 @@ async function bootstrap(): Promise<void> {
   app.enableCors({
     origin: cfg.corsOrigins,
     credentials: true, // the web client's refresh token is an HttpOnly cookie
+    // Spelled out because the default is GET,HEAD,POST — which silently made every PUT
+    // and PATCH endpoint unreachable from a browser. The requests never left the page, so
+    // editing a vendor, a menu price, an employee or marking a ticket ready simply did
+    // nothing, with no error in the server log to find. Curl worked, which is what made it
+    // hard to see.
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant', 'Idempotency-Key', 'X-Request-Id'],
   });
 

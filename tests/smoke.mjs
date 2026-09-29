@@ -114,13 +114,14 @@ async function main() {
 
   r = await call('GET', `/menu/branch/${branchId}?mealSlot=LUNCH`);
   const lunch = r.body;
-  const thaliCat = lunch?.find((c) => c.slug === 'thali');
-  const vegThali = thaliCat?.items?.find((i) => i.slug === 'veg-thali');
+  const thaliCat = lunch?.find((c) => c.slug === 'ghar-ki-thali');
+  const vegThali = thaliCat?.items?.find((i) => i.slug === 'ghar-ki-thali-veg-roti-thali');
+  const nonVegThali = thaliCat?.items?.find((i) => i.slug === 'ghar-ki-thali-non-veg-roti-thali');
   const regular = vegThali?.variants?.find((v) => v.name === 'Regular');
   check(
     'priced lunch menu',
-    r.status === 200 && !!regular && regular.priceMinor === 10000,
-    `Veg Thali Regular = ${money(regular?.priceMinor ?? 0)}`,
+    r.status === 200 && !!regular && regular.priceMinor === 9900,
+    `Ghar ki Thali (Veg) Roti = ${money(regular?.priceMinor ?? 0)}`,
   );
 
   r = await call('GET', '/public/menu/' + branchId, null, { noAuth: true });
@@ -132,12 +133,21 @@ async function main() {
   check('stock on hand', r.status === 200 && !!riceBefore, `rice ${riceBefore?.onHandQty} kg`);
 
   // ── Cash session ──────────────────────────────────────────────────────────
+  // A drawer left open by an earlier crashed run is not a failure — this suite writes real
+  // data with no rollback, so it has to be able to pick up a database it half-used before.
+  // Without this, one crash turns every later cash assertion into a false failure.
   r = await call('POST', '/cash-sessions/open', { branchId, openingFloatMinor: 200000 });
-  const session = r.body;
-  check('open cash drawer with Rs.2000 float', r.status === 201 || r.status === 200, `status ${r.status}`);
+  let session = r.body;
+  let drawerNote = `status ${r.status}`;
+  if (r.status === 400) {
+    const current = await call('GET', `/cash-sessions/current?branchId=${branchId}`);
+    session = current.body;
+    drawerNote = `reused the drawer left open by an earlier run`;
+  }
+  check('open cash drawer with Rs.2000 float', !!session?.id, drawerNote);
 
   // ── Order ─────────────────────────────────────────────────────────────────
-  const fullThali = vegThali.variants.find((v) => v.name === 'Full');
+  const nonVeg = nonVegThali.variants.find((v) => v.name === 'Regular');
   const clientRef = uuid();
   const idemKey = uuid();
   const orderBody = {
@@ -148,17 +158,17 @@ async function main() {
     guestCount: 3,
     items: [
       { variantId: regular.variantId, qty: 2 },
-      { variantId: fullThali.variantId, qty: 1, notes: 'less spicy' },
+      { variantId: nonVeg.variantId, qty: 1, notes: 'less spicy' },
     ],
     discountMinor: 0,
   };
 
   r = await call('POST', '/orders', orderBody, { idempotencyKey: idemKey });
   const order = r.body;
-  // 2 x Rs.100 + 1 x Rs.130 = Rs.330, GST-inclusive
+  // 2 x Rs.99 veg + 1 x Rs.149 non-veg = Rs.347, GST-inclusive
   check(
     'create order prices from the branch menu',
-    r.status === 201 && order?.totalMinor === 33000,
+    r.status === 201 && order?.totalMinor === 34700,
     `total ${money(order?.totalMinor ?? 0)}, token #${order?.tokenNo}`,
   );
   check(
@@ -179,7 +189,7 @@ async function main() {
   r = await call('POST', '/orders', { ...orderBody, clientRef: uuid(), unitPriceMinor: 1 }, {});
   check(
     'client cannot dictate a price',
-    r.status === 201 && r.body?.totalMinor === 33000,
+    r.status === 201 && r.body?.totalMinor === 34700,
     `total ${money(r.body?.totalMinor ?? 0)}`,
   );
   const throwaway = r.body?.id;
@@ -201,7 +211,7 @@ async function main() {
       orderId: order.id,
       tenders: [
         { tender: 'CASH', amountMinor: 20000, tenderedMinor: 20000 },
-        { tender: 'UPI_MANUAL', amountMinor: 13000, reference: 'UTR123456789012' },
+        { tender: 'UPI_MANUAL', amountMinor: 14700, reference: 'UTR123456789012' },
       ],
       roundOff: true,
       printBill: true,
@@ -591,12 +601,80 @@ async function main() {
     `variance ${money(r.body?.varianceMinor ?? 0)}`,
   );
 
+  // ── Money that comes back from raw SQL ────────────────────────────────────
+  //
+  // Postgres sums arrive as BigInt and JSON.stringify throws on one, so this endpoint used
+  // to answer a bare 500 "Something went wrong" instead of what is owed to each vendor —
+  // with the real cause visible only in the server log.
+  r = await call('GET', '/vendors/payables/balances');
+  check(
+    'vendor balances survive JSON (BigInt sums from raw SQL)',
+    r.status === 200 && Array.isArray(r.body),
+    `${r.body?.length ?? 0} vendor(s) with money outstanding`,
+  );
+
+  // A required date that simply was not sent reached Prisma as `new Date(undefined)` and
+  // came back as a 500. A missing parameter is the caller's mistake and must say so.
+  r = await call('GET', `/reports/break-even/${branchId}`);
+  check(
+    'a missing date is a 400 naming the field, not a 500',
+    r.status === 400 && r.body?.errors?.some((e) => e.field === 'from'),
+    `status ${r.status}`,
+  );
+  const isoToday = new Date().toISOString().slice(0, 10);
+  r = await call('GET', `/reports/break-even/${branchId}?from=${isoToday}&to=${isoToday}`);
+  check('break-even report', r.status === 200, `status ${r.status}`);
+
+  // ── Browser reachability ──────────────────────────────────────────────────
+  //
+  // The API's CORS default was GET,HEAD,POST, which made every PUT and PATCH endpoint
+  // unreachable from a browser while remaining perfectly reachable from curl and from this
+  // suite. Editing a vendor, a menu price, an employee or marking a kitchen ticket ready
+  // silently did nothing, with no server-side error to find. Asserted here because no
+  // other test in this file goes through a preflight.
+  {
+    const pre = await fetch(`${BASE}/staff/employees/00000000-0000-0000-0000-000000000000`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://localhost:3000',
+        'Access-Control-Request-Method': 'PUT',
+        'Access-Control-Request-Headers': 'authorization,content-type,x-tenant',
+      },
+    });
+    const allowed = (pre.headers.get('access-control-allow-methods') ?? '')
+      .split(',')
+      .map((m) => m.trim().toUpperCase());
+    check(
+      'a browser is allowed to PUT and PATCH, not only GET and POST',
+      ['PUT', 'PATCH', 'DELETE'].every((m) => allowed.includes(m)),
+      allowed.join(' ') || 'no allow-methods header',
+    );
+  }
+
   // ── Audit trail ───────────────────────────────────────────────────────────
   r = await call('GET', '/reports/audit?entity=Order');
   check(
     'audit trail records settlements',
-    r.status === 200 && r.body?.some((a) => a.action === 'ORDER_SETTLED'),
-    `${r.body?.length} order audit entries`,
+    r.status === 200 && r.body?.rows?.some((a) => a.action === 'ORDER_SETTLED'),
+    `${r.body?.total} order audit entries`,
+  );
+  check(
+    'audit trail names the actor rather than a bare user id',
+    r.body?.rows?.some((a) => a.user?.name || a.actorLabel),
+    r.body?.rows?.[0]?.user?.name ?? r.body?.rows?.[0]?.actorLabel ?? 'none',
+  );
+  check(
+    'audit filter dropdowns are derived from what is actually logged',
+    Array.isArray(r.body?.actions) && r.body.actions.includes('ORDER_SETTLED'),
+    `${r.body?.actions?.length} distinct actions`,
+  );
+
+  // Filtering by action must narrow the result, not silently ignore the parameter.
+  r = await call('GET', '/reports/audit?action=ORDER_SETTLED');
+  check(
+    'audit trail filters by action',
+    r.status === 200 && r.body?.rows?.every((a) => a.action === 'ORDER_SETTLED'),
+    `${r.body?.total} settlements`,
   );
 
   // ── Authorization ─────────────────────────────────────────────────────────

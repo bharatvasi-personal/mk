@@ -132,10 +132,12 @@ function StaffNav() {
     { href: `/${locale}/admin/staff`, label: dict.admin.staff, permission: 'employee:read' },
     { href: `/${locale}/admin/attendance`, label: dict.admin.attendance, permission: 'attendance:read:all' },
     { href: `/${locale}/admin/legal`, label: dict.admin.legal, permission: 'legal:read' },
+    { href: `/${locale}/admin/expenses`, label: dict.admin.expenses, permission: 'expense:read' },
     { href: `/${locale}/admin/reports`, label: dict.admin.reports, permission: 'report:cost' },
     { href: `/${locale}/admin/menu`, label: dict.admin.menu, permission: 'menu:write' },
     { href: `/${locale}/admin/import`, label: dict.admin.import, permission: 'inventory:write' },
     { href: `/${locale}/admin/branches`, label: dict.admin.branches, permission: 'branch:read' },
+    { href: `/${locale}/admin/audit`, label: dict.admin.audit, permission: 'audit:read' },
   ] satisfies { href: string; label: string; permission?: Permission }[]).filter(
     (i) => !i.permission || can(i.permission),
   );

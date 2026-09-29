@@ -472,6 +472,34 @@ export class AttendanceService {
    * its payloads with HMAC-SHA256; we store only the hash. This is the entire
    * "hardware integration" surface — an NFC reader is just a client that knows a secret.
    */
+  /**
+   * The punch devices registered at a branch.
+   *
+   * Deliberately does not return the secret — it is stored hashed and was shown once at
+   * registration. A device whose secret was lost is re-registered, not recovered, which is
+   * the same rule as any other credential in the system.
+   */
+  async listDevices(branchId: string) {
+    return this.db.run((tx) =>
+      tx.attendanceDevice.findMany({
+        where: { branchId },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          kind: true,
+          location: true,
+          lastSeenAt: true,
+          clockSkewSeconds: true,
+          isActive: true,
+          createdAt: true,
+          _count: { select: { events: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+    );
+  }
+
   async registerDevice(input: { branchId: string; code: string; name: string; kind: PunchInput['source']; location?: string }) {
     const secret = randomToken(32);
     return this.db.run(async (tx) => {

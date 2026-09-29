@@ -154,9 +154,37 @@ export class EmployeesService {
 
   // ─── Shifts ───────────────────────────────────────────────────────────────
 
+  /**
+   * Shifts with who is currently on them.
+   *
+   * The roster is the question this list is actually asked — "who works mornings" — and a
+   * shift list without it leaves an admin assigning people into a void, with no way to see
+   * whether the assignment took. Past assignments are excluded rather than deleted: an
+   * expired one still explains how last month's attendance was read.
+   */
   async listShifts(branchId: string) {
+    const today = new Date();
     return this.db.run((tx) =>
-      tx.shift.findMany({ where: { branchId }, orderBy: { startTime: 'asc' } }),
+      tx.shift.findMany({
+        where: { branchId },
+        include: {
+          assignments: {
+            where: {
+              effectiveFrom: { lte: today },
+              OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }],
+            },
+            select: {
+              id: true,
+              daysOfWeek: true,
+              effectiveFrom: true,
+              effectiveTo: true,
+              employee: { select: { id: true, name: true, employeeCode: true, roleType: true } },
+            },
+            orderBy: { effectiveFrom: 'desc' },
+          },
+        },
+        orderBy: { startTime: 'asc' },
+      }),
     );
   }
 
