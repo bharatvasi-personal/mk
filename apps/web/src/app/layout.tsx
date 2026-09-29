@@ -5,6 +5,10 @@ import { ServiceWorkerRegistrar } from '@/components/service-worker';
 import { BRAND_NAME } from '@/lib/config';
 
 export const metadata: Metadata = {
+  // Without this, Open Graph image URLs resolve against localhost, so the share card is
+  // generated correctly and then advertised at an address nobody else can reach — the
+  // WhatsApp preview stays blank, which is the exact problem the card exists to solve.
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'),
   title: {
     default: `${BRAND_NAME} — Home food, made honestly | Tellapur, Hyderabad`,
     template: `%s · ${BRAND_NAME}`,
