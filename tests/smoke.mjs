@@ -2,8 +2,31 @@
 // Drives the actual POS flow: sign in, open the drawer, take an order, cut a KOT,
 // settle it, then check stock depletion, the invoice number and the day's report.
 
-const BASE = 'http://localhost:4000/api';
-const TENANT = 'mithilakitchen';
+const BASE = process.env.MK_E2E_BASE ?? 'http://localhost:4000/api';
+const TENANT = process.env.MK_E2E_TENANT ?? 'mithilakitchen';
+
+/*
+ * THIS SUITE WRITES REAL DATA.
+ *
+ * It signs in, opens a cash drawer, settles bills, depletes stock, creates vendors,
+ * employees and menu items, and issues credit notes. Every one of those is a genuine
+ * record in whatever database it is pointed at — there is no rollback.
+ *
+ * So it refuses to run against anything but a local API unless explicitly forced. The
+ * failure it is guarding against is someone running `make test-e2e` with a production
+ * connection string exported, and finding a "Test Traders" vendor and an "Imported Dish"
+ * on the live public menu afterwards.
+ */
+const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/.test(BASE);
+if (!isLocal && process.env.MK_E2E_ALLOW_REMOTE !== 'yes') {
+  console.error(
+    `\nRefusing to run against ${BASE}.\n\n` +
+      'This suite creates orders, moves stock and creates master data that cannot be\n' +
+      'rolled back. Point it at a disposable database. If you genuinely mean to run it\n' +
+      'against a remote environment, set MK_E2E_ALLOW_REMOTE=yes.\n',
+  );
+  process.exit(2);
+}
 
 let token = '';
 const results = [];
@@ -41,12 +64,23 @@ const money = (m) => `Rs.${(m / 100).toFixed(2)}`;
 
 async function main() {
   // ── Auth ──────────────────────────────────────────────────────────────────
-  let r = await call('POST', '/auth/staff/login', {
-    tenantSlug: TENANT,
-    identifier: 'owner@mithilakitchen.in',
-    password: process.env.SEED_OWNER_PASSWORD || 'ChangeMe@12345',
-    client: 'POS',
-  });
+  // Backs off on 429. The suite's own rate-limit test sprays the login endpoint, which
+  // leaves the bucket for this IP exhausted for the rest of the window — so two runs
+  // back to back would otherwise fail on the second one's first assertion, for a reason
+  // that is the protection working rather than anything being broken.
+  let r;
+  for (let attempt = 0; attempt < 15; attempt += 1) {
+    r = await call('POST', '/auth/staff/login', {
+      tenantSlug: TENANT,
+      identifier: 'owner@mithilakitchen.in',
+      password: process.env.SEED_OWNER_PASSWORD || 'ChangeMe@12345',
+      client: 'POS',
+    });
+    if (r.status !== 429) break;
+    const wait = Math.min(r.body?.retryAfterSeconds ?? 5, 10);
+    if (attempt === 0) console.log(`  (rate limited from a previous run — waiting ${wait}s)`);
+    await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+  }
   check('staff login', r.status === 200 && !!r.body?.accessToken, `status ${r.status}`);
   token = r.body?.accessToken;
   if (!token) {
@@ -654,6 +688,47 @@ async function main() {
     if (attempt.status === 429) throttled += 1;
   }
   check('password spraying is rate limited', throttled > 0, `${throttled} of 12 rejected with 429`);
+
+  // ── Cleanup ───────────────────────────────────────────────────────────────
+  // Master data has no delete endpoint by design — you cannot delete a vendor you have
+  // paid or a dish you have sold. What this can do is deactivate the artefacts that are
+  // publicly visible, so a development database does not end up showing "Imported Dish"
+  // on the real menu. Everything else stays, clearly named, in a database that should be
+  // disposable anyway.
+  if (importedCat?.items?.[0]) {
+    const dish = importedCat.items[0];
+    r = await call('GET', `/menu/items?search=${encodeURIComponent(dish.name)}`);
+    const full = r.body?.[0];
+    if (full) {
+      await call('PUT', `/menu/items/${full.id}`, {
+        categoryId: full.categoryId,
+        name: full.name,
+        nameI18n: full.nameI18n ?? {},
+        foodType: full.foodType,
+        isActive: false,
+        allergens: [],
+        variants: (full.variants ?? []).map((v) => ({ id: v.id, name: v.name, nameI18n: {}, isDefault: v.isDefault, sortOrder: v.sortOrder })),
+      });
+    }
+    r = await call('GET', '/menu/categories');
+    const cat = r.body?.find((c) => c.slug === 'test-imports');
+    if (cat) {
+      await call('PUT', `/menu/categories/${cat.id}`, {
+        name: cat.name,
+        nameI18n: {},
+        slug: cat.slug,
+        mealSlot: cat.mealSlot,
+        sortOrder: 999,
+        isActive: false,
+      });
+    }
+    r = await call('GET', `/menu/branch/${branchId}?mealSlot=LUNCH`);
+    check(
+      'test artefacts are hidden from the public menu again',
+      !r.body?.some((c) => c.slug === 'test-imports'),
+      'Test Imports category deactivated',
+    );
+  }
 
   // ── Summary ───────────────────────────────────────────────────────────────
   const failed = results.filter((x) => !x.ok);

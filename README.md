@@ -121,8 +121,13 @@ rather than duplicates.
 
 ```bash
 make check      # typecheck + unit tests (money, UoM conversion, RBAC, CSV, i18n parity)
-make test-e2e   # 78 assertions against a running API
+make test-e2e   # 78 assertions against a running API — writes real data, see below
 ```
+
+`make check` is safe anywhere. **`make test-e2e` is not**: it settles bills, depletes
+stock and creates master data that cannot be rolled back, so it refuses to target anything
+but a local API unless forced. Use CI's ephemeral database as the pre-deploy gate, not the
+shop's.
 
 The end-to-end suite covers the POS flow, tenant isolation, immutability, gapless document
 numbering, unit conversion, bulk import, permission boundaries, forged payment webhooks,

@@ -23,7 +23,18 @@ export function ServiceWorkerRegistrar() {
 
     const register = async () => {
       try {
-        const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+        // The build id in the URL is what makes a deploy replace the worker: the browser
+        // compares the script byte-for-byte, so a changed query string is a new worker,
+        // and its activate step drops the previous build's caches.
+        const build = process.env.NEXT_PUBLIC_BUILD_ID ?? 'dev';
+        const registration = await navigator.serviceWorker.register(`/sw.js?v=${build}`, {
+          scope: '/',
+          updateViaCache: 'none',
+        });
+
+        // Ask for an update on every load. Browsers check roughly daily on their own,
+        // which is far too slow for a till that must match the menu it is billing from.
+        void registration.update();
 
         // A new deploy should not wait for every tab to close before taking effect —
         // the tablet at the counter is open from 7 am to 11 pm.

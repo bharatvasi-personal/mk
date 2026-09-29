@@ -33,15 +33,25 @@ export class RecipeService {
   async upsert(input: RecipeInput) {
     return this.db.run(async (tx) => {
       const tenantId = await currentTenant(tx);
-      const existing = await tx.recipe.findFirst({
+      const active = await tx.recipe.findFirst({
         where: { menuItemId: input.menuItemId, variantId: input.variantId, isActive: true },
         orderBy: { version: 'desc' },
       });
 
+      // The next version number comes from the highest version that has EVER existed for
+      // this dish, not from the currently active one. Those differ the moment a recipe is
+      // deactivated without a replacement — and numbering from the active row then
+      // reuses a version that already exists, which the unique constraint rejects.
+      const latest = await tx.recipe.findFirst({
+        where: { menuItemId: input.menuItemId, variantId: input.variantId },
+        orderBy: { version: 'desc' },
+        select: { version: true },
+      });
+
       // A new version rather than an edit. Changing a recipe must not retroactively
       // change the cost of thalis already sold.
-      if (existing) {
-        await tx.recipe.update({ where: { id: existing.id }, data: { isActive: false } });
+      if (active) {
+        await tx.recipe.update({ where: { id: active.id }, data: { isActive: false } });
       }
 
       // Validate units before writing anything. Refusing a bad recipe at save time is
@@ -56,7 +66,7 @@ export class RecipeService {
           variantId: input.variantId,
           yieldQty: new D(input.yieldQty),
           notes: input.notes,
-          version: (existing?.version ?? 0) + 1,
+          version: (latest?.version ?? 0) + 1,
           lines: {
             create: input.lines.map((l) => ({
               tenantId,

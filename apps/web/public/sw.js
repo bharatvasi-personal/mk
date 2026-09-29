@@ -21,7 +21,16 @@
  *   everything    stale-while-revalidate.
  */
 
-const VERSION = 'mk-v1';
+/*
+ * Caches are named after the build, taken from the `?v=` on this script's own URL.
+ *
+ * Without this a deploy leaves the previous build's HTML in the page cache, and that
+ * HTML points at asset hashes that no longer exist — so the counter opens with no
+ * styling at all the morning after a release. Because the worker's URL changes with the
+ * build, the browser sees a new script, installs it, and `activate` drops every cache
+ * that does not carry the current build.
+ */
+const VERSION = `mk-${new URL(self.location.href).searchParams.get('v') ?? 'dev'}`;
 const SHELL_CACHE = `${VERSION}-shell`;
 const STATIC_CACHE = `${VERSION}-static`;
 const PAGE_CACHE = `${VERSION}-pages`;
@@ -84,13 +93,18 @@ async function cacheFirst(request, cacheName) {
   const cached = await caches.match(request);
   if (cached) return cached;
   const response = await fetch(request);
+  // Only a successful response is worth keeping. Caching a 404 for a hashed asset would
+  // pin the failure for as long as the cache lives.
   if (response.ok) (await caches.open(cacheName)).put(request, response.clone());
   return response;
 }
 
 async function navigationStrategy(request) {
   try {
-    const response = await fetch(request);
+    // `no-store` so the browser's own HTTP cache cannot hand back a previous build's
+    // document here. The service worker's cache is the intended fallback, and it is
+    // scoped to this build; the HTTP cache is not.
+    const response = await fetch(request, { cache: 'no-store' });
     if (response.ok) {
       const cache = await caches.open(PAGE_CACHE);
       cache.put(request, response.clone());

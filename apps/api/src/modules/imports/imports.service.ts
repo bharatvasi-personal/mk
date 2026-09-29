@@ -434,7 +434,9 @@ export class ImportsService {
         slug: categorySlug,
         mealSlot: mealSlot!,
       },
-      update: {},
+      // Importing a row means you want it on the menu. Leaving a previously deactivated
+      // category hidden would make the import look like it silently did nothing.
+      update: { isActive: true },
     });
 
     const itemData = {
@@ -447,6 +449,7 @@ export class ImportsService {
       isLessOil: csvBool(row['isLessOil']),
       isMithilaSpecial: csvBool(row['isMithilaSpecial']),
       isChefSpecial: csvBool(row['isChefSpecial']),
+      isActive: true,
     };
 
     const item = existingItem
@@ -483,6 +486,7 @@ export class ImportsService {
       update: {
         priceMinor: priceMinor!,
         dailyLimit: csvNumber(row['dailyLimit']) ?? null,
+        isAvailable: true,
       },
     });
 
