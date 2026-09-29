@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { RecipeInput } from '@mk/shared';
+import { IncompatibleUomError, convertQty, type UomDef } from '@mk/shared';
 import { AuditService } from '../../common/audit/audit.service';
 import { TenantDb, type Tx } from '../../common/prisma/tenant-db.service';
 import { currentTenant } from '../menu/menu.service';
@@ -21,6 +22,8 @@ export interface ConsumptionLine {
  */
 @Injectable()
 export class RecipeService {
+  private readonly logger = new Logger(RecipeService.name);
+
   constructor(
     private readonly db: TenantDb,
     private readonly stock: StockService,
@@ -40,6 +43,11 @@ export class RecipeService {
       if (existing) {
         await tx.recipe.update({ where: { id: existing.id }, data: { isActive: false } });
       }
+
+      // Validate units before writing anything. Refusing a bad recipe at save time is
+      // the difference between "you cannot enter that" and three weeks of quietly wrong
+      // stock that only surfaces when someone counts.
+      await this.assertUnitsConvertible(tx, input.lines);
 
       const created = await tx.recipe.create({
         data: {
@@ -99,8 +107,11 @@ export class RecipeService {
     if (!recipe) return 0;
     let total = 0;
     for (const line of recipe.lines) {
-      const effectiveQty = Number(line.qty) * (1 + line.wastagePct / 100);
-      total += effectiveQty * line.item.avgCostMinor;
+      // avgCostMinor is per *stock* unit, so the recipe quantity has to be expressed in
+      // that unit before it is multiplied by a cost.
+      const stockQty = this.toStockQty(line);
+      if (stockQty === null) continue;
+      total += Number(stockQty) * (1 + line.wastagePct / 100) * line.item.avgCostMinor;
     }
     return Math.round(total / Number(recipe.yieldQty));
   }
@@ -151,7 +162,9 @@ export class RecipeService {
       const servings = new D(line.qty).div(recipe.yieldQty);
       let lineCost = 0;
       for (const rl of recipe.lines) {
-        const qty = new D(rl.qty).times(1 + rl.wastagePct / 100).times(servings);
+        const stockQty = this.toStockQty(rl);
+        if (stockQty === null) continue;
+        const qty = new D(stockQty).times(1 + rl.wastagePct / 100).times(servings);
         required.set(rl.inventoryItemId, (required.get(rl.inventoryItemId) ?? new D(0)).plus(qty));
         lineCost += Number(qty) * rl.item.avgCostMinor;
       }
@@ -217,11 +230,110 @@ export class RecipeService {
     });
   }
 
+  /**
+   * Rejects a recipe whose lines are written in units the stocked item cannot express.
+   *
+   * Reports every offending line at once rather than the first — someone entering a
+   * twelve-line thali recipe should not have to submit twelve times to find them all.
+   */
+  private async assertUnitsConvertible(
+    tx: Tx,
+    lines: { inventoryItemId: string; uomId: string; qty: string }[],
+  ): Promise<void> {
+    const items = await tx.inventoryItem.findMany({
+      where: { id: { in: lines.map((l) => l.inventoryItemId) } },
+      select: { id: true, name: true, uom: { select: { code: true, baseCode: true, factorToBase: true } } },
+    });
+    const uoms = await tx.uom.findMany({
+      where: { id: { in: lines.map((l) => l.uomId) } },
+      select: { id: true, code: true, baseCode: true, factorToBase: true },
+    });
+
+    const itemById = new Map(items.map((i) => [i.id, i]));
+    const uomById = new Map(uoms.map((u) => [u.id, u]));
+    const problems: string[] = [];
+
+    for (const line of lines) {
+      const item = itemById.get(line.inventoryItemId);
+      const uom = uomById.get(line.uomId);
+      if (!item || !uom) {
+        problems.push('A recipe line refers to an item or unit that does not exist');
+        continue;
+      }
+      try {
+        convertQty(line.qty, uom, item.uom);
+      } catch (err) {
+        if (err instanceof IncompatibleUomError) {
+          problems.push(
+            `${item.name}: the recipe says ${uom.code} but it is stocked in ${item.uom.code}`,
+          );
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    if (problems.length > 0) {
+      throw new BadRequestException({
+        message: 'These recipe lines use units that cannot be converted to how the item is stocked',
+        errors: problems.map((p) => ({ field: 'lines', message: p })),
+      });
+    }
+  }
+
+  /**
+   * Converts a recipe line's quantity from the unit it was written in into the unit the
+   * item is stocked in.
+   *
+   * Returns `null` rather than throwing when the two units are incompatible. That choice
+   * is deliberate and only matters in one place: `consumeForOrder` runs inside the settle
+   * transaction, so throwing here would stop the shop billing a customer because of a
+   * recipe someone mis-configured weeks ago. Money first. The line is skipped, logged,
+   * and shows up in the variance report as stock that moved without explanation — which
+   * is exactly the signal that something needs fixing.
+   *
+   * Recipes cannot be *saved* with incompatible units (see `assertUnitsConvertible`), so
+   * this path should be unreachable for anything created after this validation existed.
+   */
+  private toStockQty(line: {
+    qty: unknown;
+    uom: UomDef;
+    item: { name: string; uom: UomDef };
+  }): string | null {
+    try {
+      return convertQty(String(line.qty), line.uom, line.item.uom);
+    } catch (err) {
+      if (err instanceof IncompatibleUomError) {
+        this.logger.error(
+          `Recipe line for "${line.item.name}" is written in ${line.uom.code} but the item ` +
+            `is stocked in ${line.item.uom.code}. Skipping it — fix the recipe.`,
+        );
+        return null;
+      }
+      throw err;
+    }
+  }
+
   private async findRecipe(tx: Tx, menuItemId: string, variantId: string | null) {
     const recipe = await tx.recipe.findFirst({
       where: { menuItemId, variantId, isActive: true },
       orderBy: { version: 'desc' },
-      include: { lines: { include: { item: { select: { avgCostMinor: true } } } } },
+      include: {
+        lines: {
+          include: {
+            // Both units are needed: the recipe is written in one and stock is held in
+            // the other, and the gap between them is where quantities get destroyed.
+            uom: { select: { code: true, baseCode: true, factorToBase: true } },
+            item: {
+              select: {
+                avgCostMinor: true,
+                name: true,
+                uom: { select: { code: true, baseCode: true, factorToBase: true } },
+              },
+            },
+          },
+        },
+      },
     });
     if (!recipe && variantId !== null) return null;
     if (!recipe) return null;

@@ -18,6 +18,8 @@ setup: ## First-time setup: deps, containers, schema, seed data
 	$(COMPOSE) up -d
 	@echo "waiting for postgres…"
 	@until $(COMPOSE) exec -T postgres pg_isready -U $${POSTGRES_USER:-mk_owner} >/dev/null 2>&1; do sleep 1; done
+	@$(COMPOSE) exec -T postgres psql -U $${POSTGRES_USER:-mk_owner} -d postgres \
+		-c "CREATE DATABASE mithilakitchen_shadow" 2>/dev/null || true
 	$(MAKE) db-setup
 	@echo ""
 	@echo "  Done. Run 'make dev', then:"

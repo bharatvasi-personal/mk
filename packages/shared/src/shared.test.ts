@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { extractGst, formatMinor, pctBp, roundToRupee, toMinor } from './money';
 import { can, ROLE_PERMISSIONS } from './rbac';
 import { dictionaries } from './i18n';
+import { areCompatible, convertQty, IncompatibleUomError } from './uom';
 
 test('money: paise conversion is exact', () => {
   assert.equal(toMinor(120.5), 12050);
@@ -74,4 +75,50 @@ test('i18n: no translation is left as the English string', () => {
   assert.ok(allowed.size > 0);
   assert.notEqual(dictionaries.hi.common.save, dictionaries.en.common.save);
   assert.notEqual(dictionaries.te.common.save, dictionaries.en.common.save);
+});
+
+// ─── UoM conversion ──────────────────────────────────────────────────────────
+// These exist because the absence of them silently deducted 180 kg of paneer for a
+// recipe line that said 180 g.
+
+const KG = { code: 'kg' };
+const G = { code: 'g', baseCode: 'kg', factorToBase: 0.001 };
+const L = { code: 'L' };
+const ML = { code: 'ml', baseCode: 'L', factorToBase: 0.001 };
+const PCS = { code: 'pcs' };
+const DOZEN = { code: 'dozen', baseCode: 'pcs', factorToBase: 12 };
+
+test('uom: a recipe in grams deducts kilograms correctly', () => {
+  assert.equal(convertQty(180, G, KG), '0.18');
+  assert.equal(convertQty('0.18', KG, G), '180');
+});
+
+test('uom: converting to the same unit is a no-op', () => {
+  assert.equal(convertQty(2.5, KG, KG), '2.5');
+});
+
+test('uom: millilitres and litres', () => {
+  assert.equal(convertQty(125, ML, L), '0.125');
+});
+
+test('uom: countable units convert too', () => {
+  assert.equal(convertQty(2, DOZEN, PCS), '24');
+  assert.equal(convertQty(6, PCS, DOZEN), '0.5');
+});
+
+test('uom: incompatible units are refused, never guessed', () => {
+  assert.equal(areCompatible(L, KG), false);
+  assert.throws(() => convertQty(1, L, KG), IncompatibleUomError);
+  assert.throws(() => convertQty(1, PCS, KG), IncompatibleUomError);
+});
+
+test('uom: conversion round-trips without drift', () => {
+  const grams = convertQty(convertQty(0.185, KG, G), G, KG);
+  assert.equal(grams, '0.185');
+});
+
+test('uom: result respects the 4dp precision of the quantity columns', () => {
+  // 1 g in kg is 0.001; a third of a gram would exceed what the column can hold.
+  assert.equal(convertQty(1, G, KG), '0.001');
+  assert.equal(convertQty(0.5, G, KG), '0.0005');
 });

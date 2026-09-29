@@ -8,6 +8,7 @@ const node_test_1 = require("node:test");
 const money_1 = require("./money");
 const rbac_1 = require("./rbac");
 const i18n_1 = require("./i18n");
+const uom_1 = require("./uom");
 (0, node_test_1.test)('money: paise conversion is exact', () => {
     strict_1.default.equal((0, money_1.toMinor)(120.5), 12050);
     strict_1.default.equal((0, money_1.toMinor)(0.1 + 0.2), 30); // the float trap
@@ -65,4 +66,41 @@ const i18n_1 = require("./i18n");
     strict_1.default.ok(allowed.size > 0);
     strict_1.default.notEqual(i18n_1.dictionaries.hi.common.save, i18n_1.dictionaries.en.common.save);
     strict_1.default.notEqual(i18n_1.dictionaries.te.common.save, i18n_1.dictionaries.en.common.save);
+});
+// ─── UoM conversion ──────────────────────────────────────────────────────────
+// These exist because the absence of them silently deducted 180 kg of paneer for a
+// recipe line that said 180 g.
+const KG = { code: 'kg' };
+const G = { code: 'g', baseCode: 'kg', factorToBase: 0.001 };
+const L = { code: 'L' };
+const ML = { code: 'ml', baseCode: 'L', factorToBase: 0.001 };
+const PCS = { code: 'pcs' };
+const DOZEN = { code: 'dozen', baseCode: 'pcs', factorToBase: 12 };
+(0, node_test_1.test)('uom: a recipe in grams deducts kilograms correctly', () => {
+    strict_1.default.equal((0, uom_1.convertQty)(180, G, KG), '0.18');
+    strict_1.default.equal((0, uom_1.convertQty)('0.18', KG, G), '180');
+});
+(0, node_test_1.test)('uom: converting to the same unit is a no-op', () => {
+    strict_1.default.equal((0, uom_1.convertQty)(2.5, KG, KG), '2.5');
+});
+(0, node_test_1.test)('uom: millilitres and litres', () => {
+    strict_1.default.equal((0, uom_1.convertQty)(125, ML, L), '0.125');
+});
+(0, node_test_1.test)('uom: countable units convert too', () => {
+    strict_1.default.equal((0, uom_1.convertQty)(2, DOZEN, PCS), '24');
+    strict_1.default.equal((0, uom_1.convertQty)(6, PCS, DOZEN), '0.5');
+});
+(0, node_test_1.test)('uom: incompatible units are refused, never guessed', () => {
+    strict_1.default.equal((0, uom_1.areCompatible)(L, KG), false);
+    strict_1.default.throws(() => (0, uom_1.convertQty)(1, L, KG), uom_1.IncompatibleUomError);
+    strict_1.default.throws(() => (0, uom_1.convertQty)(1, PCS, KG), uom_1.IncompatibleUomError);
+});
+(0, node_test_1.test)('uom: conversion round-trips without drift', () => {
+    const grams = (0, uom_1.convertQty)((0, uom_1.convertQty)(0.185, KG, G), G, KG);
+    strict_1.default.equal(grams, '0.185');
+});
+(0, node_test_1.test)('uom: result respects the 4dp precision of the quantity columns', () => {
+    // 1 g in kg is 0.001; a third of a gram would exceed what the column can hold.
+    strict_1.default.equal((0, uom_1.convertQty)(1, G, KG), '0.001');
+    strict_1.default.equal((0, uom_1.convertQty)(0.5, G, KG), '0.0005');
 });

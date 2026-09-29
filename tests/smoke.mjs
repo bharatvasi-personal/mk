@@ -245,6 +245,25 @@ async function main() {
     r.status === 201 || r.status === 200,
     r.body?.noteNo,
   );
+  check(
+    'credit notes have their own gapless, per-branch, per-FY series',
+    /^CN\/OSN\/2026-27\/\d{5}$/.test(r.body?.noteNo ?? ''),
+    r.body?.noteNo,
+  );
+
+  // Two credit notes in a row must not collide. The previous implementation numbered
+  // them with count()+1, which two concurrent issuers resolve to the same value.
+  const firstNote = r.body?.noteNo;
+  r = await call('POST', '/orders/credit-note', {
+    orderId: order.id,
+    amountMinor: 1000,
+    reason: 'Second correction on the same bill',
+  });
+  check(
+    'a second credit note gets the next number, not a duplicate',
+    r.body?.noteNo && r.body.noteNo !== firstNote,
+    `${firstNote} then ${r.body?.noteNo}`,
+  );
 
   // ── Stock depletion ───────────────────────────────────────────────────────
   r = await call('GET', `/inventory/on-hand/${branchId}`);
@@ -262,6 +281,50 @@ async function main() {
     r.body?.some((e) => e.reason === 'SALE_CONSUMPTION'),
     `${r.body?.length} ledger entries`,
   );
+
+  // ── Unit conversion ───────────────────────────────────────────────────────
+  // A recipe written in grams against an item stocked in kilograms must convert, not
+  // deduct 180 kg of paneer for a 180 g line.
+  r = await call('GET', '/inventory/uoms');
+  const gram = r.body?.find((u) => u.code === 'g');
+  const kilo = r.body?.find((u) => u.code === 'kg');
+  check('units of measure are defined with conversion factors', !!gram && !!kilo, `g -> ${gram?.baseCode}`);
+
+  r = await call('GET', '/inventory/items?search=Paneer');
+  const paneer = r.body?.[0];
+
+  r = await call('GET', `/menu/branch/${branchId}?mealSlot=EVENING`);
+  const gobi = r.body?.flatMap((c) => c.items).find((i) => i.slug === 'gobi-manchurian');
+  const gobiVariant = gobi?.variants?.[0];
+
+  if (paneer && gobiVariant && gram) {
+    r = await call('POST', '/inventory/recipes', {
+      menuItemId: gobi.id,
+      variantId: gobiVariant.variantId,
+      yieldQty: '1',
+      lines: [{ inventoryItemId: paneer.id, qty: '180', uomId: gram.id, wastagePct: 0, isOptional: false }],
+    });
+    check('a recipe can be written in grams for a kg-stocked item', r.status === 201 || r.status === 200);
+
+    r = await call('GET', `/inventory/margins/${branchId}`);
+    const gobiMargin = r.body?.find((m) => m.menuItemId === gobi.id);
+    // 180 g of paneer at Rs.340/kg is Rs.61.20, not Rs.61,200.
+    check(
+      'grams are converted before costing, not treated as kilograms',
+      gobiMargin?.costMinor > 5000 && gobiMargin?.costMinor < 8000,
+      `cost ${money(gobiMargin?.costMinor ?? 0)} for 180g of paneer at Rs.340/kg`,
+    );
+
+    // An impossible conversion must be refused at save time, not guessed at.
+    const litre = (await call('GET', '/inventory/uoms')).body?.find((u) => u.code === 'L');
+    r = await call('POST', '/inventory/recipes', {
+      menuItemId: gobi.id,
+      variantId: gobiVariant.variantId,
+      yieldQty: '1',
+      lines: [{ inventoryItemId: paneer.id, qty: '1', uomId: litre.id, wastagePct: 0, isOptional: false }],
+    });
+    check('a recipe in litres for a kg item is refused', r.status === 400, r.body?.errors?.[0]?.message);
+  }
 
   // ── Purchasing ────────────────────────────────────────────────────────────
   r = await call('GET', `/inventory/buy-today/${branchId}?rhythm=DAILY`);

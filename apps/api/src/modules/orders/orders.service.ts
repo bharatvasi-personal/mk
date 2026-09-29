@@ -313,17 +313,7 @@ export class OrdersService {
     const now = new Date();
     const fy = financialYear(now, tenant.fyStartMonth);
 
-    const seq = await tx.invoiceSequence.upsert({
-      where: { branchId_fy: { branchId: order.branchId, fy } },
-      create: { tenantId, branchId: order.branchId, fy, prefix: `${order.branch.code}/${fy}`, lastNumber: 0 },
-      update: {},
-    });
-
-    const [locked] = await tx.$queryRaw<{ last_number: number }[]>`
-      SELECT last_number FROM invoice_sequences WHERE id = ${seq.id}::uuid FOR UPDATE
-    `;
-    const next = (locked?.last_number ?? 0) + 1;
-    await tx.invoiceSequence.update({ where: { id: seq.id }, data: { lastNumber: next } });
+    const invoiceNo = await this.nextDocumentNumber(tx, order.branchId, order.branch.code, fy, 'INV');
 
     // Menu prices are GST-inclusive, so the tax already extracted on each line is split
     // half CGST / half SGST. IGST does not arise — a restaurant serves where it stands.
@@ -348,7 +338,7 @@ export class OrdersService {
       data: {
         tenantId,
         orderId,
-        invoiceNo: `${seq.prefix}/${String(next).padStart(5, '0')}`,
+        invoiceNo,
         fy,
         sellerSnapshot: {
           legalName: tenant.legalName ?? tenant.name,
@@ -420,6 +410,42 @@ export class OrdersService {
     });
 
     return { ...settled, replayed: false };
+  }
+
+  /**
+   * Allocates the next number in a gapless, per-branch, per-financial-year, per-series run.
+   *
+   * `SELECT ... FOR UPDATE` on the counter row rather than a Postgres sequence, because a
+   * sequence leaks numbers on rollback and GST requires an unbroken run — an auditor will
+   * ask about the gap. The row lock serialises concurrent issuers at the same branch,
+   * which is exactly what two tablets at one counter do at 1:15 pm.
+   *
+   * Because the lock is held to the end of the caller's transaction, a rollback releases
+   * the number too, and the next caller gets it.
+   */
+  private async nextDocumentNumber(
+    tx: Tx,
+    branchId: string,
+    branchCode: string,
+    fy: string,
+    series: 'INV' | 'CN',
+  ): Promise<string> {
+    const tenantId = await currentTenant(tx);
+    const prefix = series === 'INV' ? `${branchCode}/${fy}` : `CN/${branchCode}/${fy}`;
+
+    const row = await tx.invoiceSequence.upsert({
+      where: { branchId_fy_series: { branchId, fy, series } },
+      create: { tenantId, branchId, fy, series, prefix, lastNumber: 0 },
+      update: {},
+    });
+
+    const [locked] = await tx.$queryRaw<{ last_number: number }[]>`
+      SELECT last_number FROM invoice_sequences WHERE id = ${row.id}::uuid FOR UPDATE
+    `;
+    const next = (locked?.last_number ?? 0) + 1;
+    await tx.invoiceSequence.update({ where: { id: row.id }, data: { lastNumber: next } });
+
+    return `${row.prefix}/${String(next).padStart(5, '0')}`;
   }
 
   // ─── Voids, cancels, credit notes ─────────────────────────────────────────
@@ -495,13 +521,27 @@ export class OrdersService {
         throw new BadRequestException('Credit notes would exceed the invoice total');
       }
 
-      const count = await tx.creditNote.count();
+      const branch = await tx.branch.findUniqueOrThrow({
+        where: { id: order.branchId },
+        select: { code: true },
+      });
+      // The same locked counter as invoices, in its own series. The previous
+      // implementation used `count() + 1`, which two concurrent credit notes would
+      // resolve to the same number, and which never reset per financial year.
+      const noteNo = await this.nextDocumentNumber(
+        tx,
+        order.branchId,
+        branch.code,
+        order.invoice.fy,
+        'CN',
+      );
+
       const note = await tx.creditNote.create({
         data: {
           tenantId,
           invoiceId: order.invoice.id,
           orderId,
-          noteNo: `CN/${order.invoice.fy}/${String(count + 1).padStart(5, '0')}`,
+          noteNo,
           reason,
           amountMinor,
           issuedByUserId: TenantContext.actor()?.userId,

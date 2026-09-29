@@ -17,6 +17,10 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  // Prisma RESETS the shadow database whenever it computes a migration diff. Naming it
+  // explicitly here means a `migrate dev` or `migrate diff` can never be pointed at the
+  // real database by accident — which drops every row in it.
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -663,22 +667,29 @@ model Refund {
   @@map("refunds")
 }
 
-/// Gapless, per-branch, per-financial-year invoice numbering. The counter is
-/// incremented with SELECT ... FOR UPDATE inside the settle transaction, which is
-/// what makes the sequence legally gapless (a Postgres sequence is not — it leaks on rollback).
+/// Gapless, per-branch, per-financial-year, per-series document numbering.
+///
+/// The counter is incremented with SELECT ... FOR UPDATE inside the issuing transaction,
+/// which is what makes the sequence legally gapless — a Postgres sequence is not, because
+/// it leaks numbers on rollback and a GST auditor will ask about the gap.
+///
+/// `series` separates invoices from credit notes (and whatever comes later) so each has
+/// its own unbroken run of numbers, as the GST rules require.
 model InvoiceSequence {
   id         String   @id @default(uuid()) @db.Uuid
   tenantId   String   @map("tenant_id") @db.Uuid
   branchId   String   @map("branch_id") @db.Uuid
   /// "2026-27"
   fy         String
+  /// "INV" for tax invoices, "CN" for credit notes.
+  series     String   @default("INV")
   prefix     String
   lastNumber Int      @default(0) @map("last_number")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
   branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
 
-  @@unique([branchId, fy])
+  @@unique([branchId, fy, series])
   @@map("invoice_sequences")
 }
 
