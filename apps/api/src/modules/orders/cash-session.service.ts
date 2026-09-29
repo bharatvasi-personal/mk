@@ -3,6 +3,7 @@ import { AuditService } from '../../common/audit/audit.service';
 import { TenantDb } from '../../common/prisma/tenant-db.service';
 import { TenantContext } from '../../common/tenant/tenant-context';
 import { currentTenant } from '../menu/menu.service';
+import { assertBranchAccess } from '../../common/auth/branch-access';
 
 /**
  * The cash drawer shift, and the Z-report.
@@ -71,6 +72,7 @@ export class CashSessionService {
   }) {
     return this.db.run(async (tx) => {
       const session = await tx.cashSession.findUniqueOrThrow({ where: { id: input.cashSessionId } });
+      assertBranchAccess(session.branchId, 'cash_session:manage');
       if (session.closedAt) throw new BadRequestException('This drawer is already closed');
 
       const tally = await this.tally(tx, session.id, session.openingFloatMinor);

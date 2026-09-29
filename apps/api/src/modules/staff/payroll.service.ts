@@ -4,6 +4,7 @@ import { AuditService } from '../../common/audit/audit.service';
 import { TenantDb, type Tx } from '../../common/prisma/tenant-db.service';
 import { TenantContext } from '../../common/tenant/tenant-context';
 import { currentTenant } from '../menu/menu.service';
+import { assertBranchAccess } from '../../common/auth/branch-access';
 
 const D = Prisma.Decimal;
 
@@ -173,6 +174,7 @@ export class PayrollService {
         where: { id: payrollRunId },
         include: { lines: true },
       });
+      assertBranchAccess(run.branchId, 'payroll:approve');
       if (run.status !== 'DRAFT') throw new BadRequestException('Only a draft run can be approved');
 
       // Freeze the days this run paid.
@@ -231,6 +233,7 @@ export class PayrollService {
   async markPaid(payrollRunId: string, payments: { employeeId: string; method: string; reference?: string }[]) {
     return this.db.run(async (tx) => {
       const run = await tx.payrollRun.findUniqueOrThrow({ where: { id: payrollRunId } });
+      assertBranchAccess(run.branchId, 'payroll:approve');
       if (run.status !== 'APPROVED') throw new BadRequestException('Approve the run before marking it paid');
 
       for (const p of payments) {

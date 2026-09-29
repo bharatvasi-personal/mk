@@ -8,6 +8,7 @@ import { TenantDb, type Tx } from '../../common/prisma/tenant-db.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { TenantContext } from '../../common/tenant/tenant-context';
 import { currentTenant } from '../menu/menu.service';
+import { assertBranchAccess } from '../../common/auth/branch-access';
 
 /** Reminder ladder. Escalating, because the failure mode is a sealed shop. */
 const REMINDER_OFFSETS = [60, 30, 14, 7, 3, 1, 0];
@@ -164,6 +165,8 @@ export class LegalService {
   async download(documentId: string) {
     return this.db.run(async (tx) => {
       const doc = await tx.legalDocument.findUniqueOrThrow({ where: { id: documentId } });
+      // A document scoped to one branch must not be downloadable from another.
+      assertBranchAccess(doc.branchId, 'legal:download');
       const ctx = TenantContext.peek();
 
       await tx.documentAccessLog.create({

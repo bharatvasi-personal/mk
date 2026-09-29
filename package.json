@@ -22,7 +22,8 @@
     "db:migrate": "npm run db:migrate -w @mk/api",
     "db:seed": "npm run db:seed -w @mk/api",
     "db:reset": "npm run db:reset -w @mk/api",
-    "test:e2e": "node tests/smoke.mjs"
+    "test:e2e": "node tests/smoke.mjs",
+    "audit:rbac": "npm run audit:rbac -w @mk/api"
   },
   "devDependencies": {
     "@fastify/static": "^10.1.5",

@@ -214,6 +214,17 @@ export function permissionsFor(grants: readonly RoleGrant[]): Set<Permission> {
  * Does this set of grants allow `permission`, optionally at `branchId`?
  * A tenant-wide grant satisfies any branch. A branch grant satisfies only that branch.
  */
+/**
+ * Does this person hold `permission` — optionally, at `branchId`?
+ *
+ * With no branch given this asks "anywhere", which is the right question for
+ * tenant-level things: the dish catalogue, the vendor directory and the item list are
+ * shared across branches, so a manager of one branch legitimately edits them.
+ *
+ * It is the WRONG question for anything that belongs to a branch. Use `canAt` there, and
+ * pass the branch the *record* belongs to rather than the one the caller claims — see the
+ * note on `canAt`.
+ */
 export function can(
   grants: readonly RoleGrant[],
   permission: Permission,
@@ -221,9 +232,34 @@ export function can(
 ): boolean {
   for (const g of grants) {
     if (!ROLE_PERMISSIONS[g.role]?.includes(permission)) continue;
-    if (g.branchId === null) return true;
-    if (branchId && g.branchId === branchId) return true;
-    if (!branchId) return true;
+    if (g.branchId === null) return true; // tenant-wide grant satisfies any branch
+    if (!branchId) return true; // asking "anywhere", and this grant is somewhere
+    if (g.branchId === branchId) return true;
+  }
+  return false;
+}
+
+/**
+ * Strict branch check: the permission must be held **at this specific branch**.
+ *
+ * The distinction matters because most endpoints that act on a record take the record's
+ * id, not a branch id — settle this order, approve this stock count, approve this payroll
+ * run, download this document. The request never mentions a branch, so a guard reading
+ * the request cannot scope it, and a manager at one branch could act on another's records
+ * simply by knowing an id.
+ *
+ * So the check has to happen after the record is loaded, against the branch the record
+ * actually belongs to. A missing branch here is a programming error, not "anywhere" —
+ * hence the separate function rather than an optional argument that is easy to forget.
+ */
+export function canAt(
+  grants: readonly RoleGrant[],
+  permission: Permission,
+  branchId: string,
+): boolean {
+  for (const g of grants) {
+    if (!ROLE_PERMISSIONS[g.role]?.includes(permission)) continue;
+    if (g.branchId === null || g.branchId === branchId) return true;
   }
   return false;
 }

@@ -63,6 +63,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Audit access control
+        # Fails if any endpoint declares no access policy. The failure mode this catches
+        # is an absent line, which review does not see.
+        run: npm run audit:rbac
+
       - name: Migrate and apply security objects
         run: |
           npm run db:migrate:deploy -w @mk/api

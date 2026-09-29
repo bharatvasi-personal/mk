@@ -170,3 +170,78 @@ const DOZEN = { code: 'dozen', baseCode: 'pcs', factorToBase: 12 };
     const back = (0, csv_1.parseCsvLines)(text);
     strict_1.default.deepEqual(back[1], ['Dal, toor', 'said "buy"']);
 });
+// ─── RBAC: branch scoping ────────────────────────────────────────────────────
+// These exist because `can()` answers "anywhere" when no branch is given, which is right
+// for the shared catalogue and wrong for a record that belongs to a branch.
+const MANAGER_A = [{ role: 'MANAGER', branchId: 'branch-a' }];
+const OWNER_ANY = [{ role: 'OWNER', branchId: null }];
+const TWO_HATS = [
+    { role: 'MANAGER', branchId: 'branch-a' },
+    { role: 'HELPER', branchId: 'branch-b' },
+];
+(0, node_test_1.test)('rbac: canAt refuses a permission held only at another branch', () => {
+    strict_1.default.equal((0, rbac_1.canAt)(MANAGER_A, 'order:settle', 'branch-a'), true);
+    strict_1.default.equal((0, rbac_1.canAt)(MANAGER_A, 'order:settle', 'branch-b'), false);
+});
+(0, node_test_1.test)('rbac: a tenant-wide grant satisfies canAt at every branch', () => {
+    strict_1.default.equal((0, rbac_1.canAt)(OWNER_ANY, 'order:settle', 'branch-a'), true);
+    strict_1.default.equal((0, rbac_1.canAt)(OWNER_ANY, 'order:settle', 'anything-at-all'), true);
+});
+(0, node_test_1.test)('rbac: can() without a branch means anywhere — the shared catalogue case', () => {
+    // A manager of one branch may edit the tenant-level dish catalogue.
+    strict_1.default.equal((0, rbac_1.can)(MANAGER_A, 'menu:write'), true);
+    // But that must not become permission at a branch they do not hold.
+    strict_1.default.equal((0, rbac_1.canAt)(MANAGER_A, 'menu:write', 'branch-b'), false);
+});
+(0, node_test_1.test)('rbac: two roles at two branches keep their own scopes', () => {
+    // Manager at A, helper at B: may void at A, may not void at B.
+    strict_1.default.equal((0, rbac_1.canAt)(TWO_HATS, 'order:void', 'branch-a'), true);
+    strict_1.default.equal((0, rbac_1.canAt)(TWO_HATS, 'order:void', 'branch-b'), false);
+    // Helper powers apply at B.
+    strict_1.default.equal((0, rbac_1.canAt)(TWO_HATS, 'order:settle', 'branch-b'), true);
+});
+(0, node_test_1.test)('rbac: every role maps only to permissions that exist', () => {
+    for (const role of rbac_1.ROLES) {
+        for (const p of rbac_1.ROLE_PERMISSIONS[role]) {
+            strict_1.default.ok(rbac_1.PERMISSIONS.includes(p), `${role} grants unknown permission ${p}`);
+        }
+    }
+});
+(0, node_test_1.test)('rbac: every permission is reachable by at least one role', () => {
+    const granted = new Set(rbac_1.ROLES.flatMap((r) => [...rbac_1.ROLE_PERMISSIONS[r]]));
+    const orphans = rbac_1.PERMISSIONS.filter((p) => !granted.has(p));
+    strict_1.default.deepEqual(orphans, [], `permissions no role can ever hold: ${orphans.join(', ')}`);
+});
+(0, node_test_1.test)('rbac: the money and secrets boundary holds for every non-owner role', () => {
+    // The specific things a helper or chef must never reach, checked as a set rather than
+    // one assertion each so adding a role cannot quietly widen it.
+    const forbiddenForFloorStaff = [
+        'inventory:cost:read', 'report:sales', 'report:cost', 'payroll:read', 'payroll:run',
+        'legal:read', 'legal:download', 'role:grant', 'tenant:settings', 'audit:read',
+        'payable:pay', 'salary:read',
+    ];
+    for (const role of ['HELPER', 'CHEF']) {
+        for (const p of forbiddenForFloorStaff) {
+            strict_1.default.equal(rbac_1.ROLE_PERMISSIONS[role].includes(p), false, `${role} must not hold ${p}`);
+        }
+    }
+});
+(0, node_test_1.test)('rbac: only the owner may re-grant access or change tenant settings', () => {
+    for (const role of rbac_1.ROLES) {
+        const expected = role === 'OWNER';
+        strict_1.default.equal(rbac_1.ROLE_PERMISSIONS[role].includes('role:grant'), expected, `${role} role:grant`);
+        strict_1.default.equal(rbac_1.ROLE_PERMISSIONS[role].includes('tenant:settings'), expected, `${role} tenant:settings`);
+    }
+});
+(0, node_test_1.test)('rbac: an accountant can read money but cannot change operations', () => {
+    const acct = rbac_1.ROLE_PERMISSIONS.ACCOUNTANT;
+    strict_1.default.ok(acct.includes('report:cost'));
+    strict_1.default.ok(acct.includes('payable:pay'));
+    strict_1.default.equal(acct.includes('menu:write'), false);
+    strict_1.default.equal(acct.includes('order:create'), false);
+    strict_1.default.equal(acct.includes('employee:write'), false);
+});
+(0, node_test_1.test)('rbac: no grants at all means no permission', () => {
+    strict_1.default.equal((0, rbac_1.can)([], 'order:read'), false);
+    strict_1.default.equal((0, rbac_1.canAt)([], 'order:read', 'branch-a'), false);
+});

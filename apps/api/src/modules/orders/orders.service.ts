@@ -13,6 +13,7 @@ import { TenantContext } from '../../common/tenant/tenant-context';
 import { RecipeService } from '../inventory/recipe.service';
 import { currentTenant } from '../menu/menu.service';
 import { financialYear, priceOrder, type PricedLine } from './pricing';
+import { assertBranchAccess } from '../../common/auth/branch-access';
 
 /** Which kitchen station prepares a category. The Chinese counter gets its own tickets. */
 function stationFor(categorySlug: string, itemName: string): KitchenStation {
@@ -144,6 +145,8 @@ export class OrdersService {
           kitchenTickets: true,
         },
       });
+      assertBranchAccess(order.branchId, 'order:create');
+
       if (order.status === 'SETTLED' || order.status === 'CANCELLED') {
         throw new BadRequestException('This order is closed');
       }
@@ -208,6 +211,9 @@ export class OrdersService {
         where: { id: input.orderId },
         include: { items: { where: { isVoided: false } }, payments: true, branch: true },
       });
+
+      // The request carries an order id and no branch, so the guard could not scope it.
+      assertBranchAccess(order.branchId, 'order:settle');
 
       if (order.status === 'SETTLED') {
         throw new ConflictException('This bill is already settled');
@@ -453,6 +459,7 @@ export class OrdersService {
   async voidItem(orderId: string, orderItemId: string, reason: string) {
     return this.db.run(async (tx) => {
       const order = await tx.order.findUniqueOrThrow({ where: { id: orderId } });
+      assertBranchAccess(order.branchId, 'order:void');
       if (order.status === 'SETTLED') {
         throw new BadRequestException('A settled bill cannot be edited — issue a credit note instead');
       }
@@ -475,6 +482,7 @@ export class OrdersService {
   async cancel(orderId: string, reason: string) {
     return this.db.run(async (tx) => {
       const order = await tx.order.findUniqueOrThrow({ where: { id: orderId } });
+      assertBranchAccess(order.branchId, 'order:void');
       if (order.status === 'SETTLED') {
         throw new BadRequestException('A settled bill cannot be cancelled — issue a credit note');
       }
@@ -514,6 +522,7 @@ export class OrdersService {
         where: { id: orderId },
         include: { invoice: true, creditNotes: true },
       });
+      assertBranchAccess(order.branchId, 'order:refund');
       if (!order.invoice) throw new BadRequestException('This order has no invoice to credit');
 
       const alreadyCredited = order.creditNotes.reduce((s, c) => s + c.amountMinor, 0);
@@ -673,6 +682,7 @@ export class OrdersService {
         },
       });
       if (!order) throw new NotFoundException('Order not found');
+      assertBranchAccess(order.branchId, 'order:read');
       return order;
     });
   }

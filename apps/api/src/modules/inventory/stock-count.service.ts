@@ -5,6 +5,7 @@ import { TenantDb } from '../../common/prisma/tenant-db.service';
 import { TenantContext } from '../../common/tenant/tenant-context';
 import { currentTenant } from '../menu/menu.service';
 import { StockService } from './stock.service';
+import { assertBranchAccess } from '../../common/auth/branch-access';
 
 const D = Prisma.Decimal;
 
@@ -100,6 +101,7 @@ export class StockCountService {
         where: { id: stockCountId },
         include: { lines: true },
       });
+      assertBranchAccess(count.branchId, 'stock:count:approve');
       if (count.status === 'APPROVED') throw new BadRequestException('This count is already approved');
       if (count.status === 'CANCELLED') throw new BadRequestException('This count was cancelled');
 

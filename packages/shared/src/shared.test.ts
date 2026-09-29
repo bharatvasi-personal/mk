@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { extractGst, formatMinor, pctBp, roundToRupee, toMinor } from './money';
-import { can, ROLE_PERMISSIONS } from './rbac';
+import { can, canAt, PERMISSIONS, ROLES, ROLE_PERMISSIONS } from './rbac';
 import { dictionaries } from './i18n';
 import { areCompatible, convertQty, IncompatibleUomError } from './uom';
 import { csvBool, csvDate, csvEnum, csvMoneyMinor, parseCsv, parseCsvLines, toCsv } from './csv';
@@ -198,4 +198,91 @@ test('csv: round-trips through toCsv', () => {
   const text = toCsv(['name', 'notes'], [['Dal, toor', 'said "buy"']]);
   const back = parseCsvLines(text);
   assert.deepEqual(back[1], ['Dal, toor', 'said "buy"']);
+});
+
+// ─── RBAC: branch scoping ────────────────────────────────────────────────────
+// These exist because `can()` answers "anywhere" when no branch is given, which is right
+// for the shared catalogue and wrong for a record that belongs to a branch.
+
+const MANAGER_A = [{ role: 'MANAGER' as const, branchId: 'branch-a' }];
+const OWNER_ANY = [{ role: 'OWNER' as const, branchId: null }];
+const TWO_HATS = [
+  { role: 'MANAGER' as const, branchId: 'branch-a' },
+  { role: 'HELPER' as const, branchId: 'branch-b' },
+];
+
+test('rbac: canAt refuses a permission held only at another branch', () => {
+  assert.equal(canAt(MANAGER_A, 'order:settle', 'branch-a'), true);
+  assert.equal(canAt(MANAGER_A, 'order:settle', 'branch-b'), false);
+});
+
+test('rbac: a tenant-wide grant satisfies canAt at every branch', () => {
+  assert.equal(canAt(OWNER_ANY, 'order:settle', 'branch-a'), true);
+  assert.equal(canAt(OWNER_ANY, 'order:settle', 'anything-at-all'), true);
+});
+
+test('rbac: can() without a branch means anywhere — the shared catalogue case', () => {
+  // A manager of one branch may edit the tenant-level dish catalogue.
+  assert.equal(can(MANAGER_A, 'menu:write'), true);
+  // But that must not become permission at a branch they do not hold.
+  assert.equal(canAt(MANAGER_A, 'menu:write', 'branch-b'), false);
+});
+
+test('rbac: two roles at two branches keep their own scopes', () => {
+  // Manager at A, helper at B: may void at A, may not void at B.
+  assert.equal(canAt(TWO_HATS, 'order:void', 'branch-a'), true);
+  assert.equal(canAt(TWO_HATS, 'order:void', 'branch-b'), false);
+  // Helper powers apply at B.
+  assert.equal(canAt(TWO_HATS, 'order:settle', 'branch-b'), true);
+});
+
+test('rbac: every role maps only to permissions that exist', () => {
+  for (const role of ROLES) {
+    for (const p of ROLE_PERMISSIONS[role]) {
+      assert.ok(PERMISSIONS.includes(p), `${role} grants unknown permission ${p}`);
+    }
+  }
+});
+
+test('rbac: every permission is reachable by at least one role', () => {
+  const granted = new Set(ROLES.flatMap((r) => [...ROLE_PERMISSIONS[r]]));
+  const orphans = PERMISSIONS.filter((p) => !granted.has(p));
+  assert.deepEqual(orphans, [], `permissions no role can ever hold: ${orphans.join(', ')}`);
+});
+
+test('rbac: the money and secrets boundary holds for every non-owner role', () => {
+  // The specific things a helper or chef must never reach, checked as a set rather than
+  // one assertion each so adding a role cannot quietly widen it.
+  const forbiddenForFloorStaff = [
+    'inventory:cost:read', 'report:sales', 'report:cost', 'payroll:read', 'payroll:run',
+    'legal:read', 'legal:download', 'role:grant', 'tenant:settings', 'audit:read',
+    'payable:pay', 'salary:read',
+  ] as const;
+  for (const role of ['HELPER', 'CHEF'] as const) {
+    for (const p of forbiddenForFloorStaff) {
+      assert.equal(ROLE_PERMISSIONS[role].includes(p), false, `${role} must not hold ${p}`);
+    }
+  }
+});
+
+test('rbac: only the owner may re-grant access or change tenant settings', () => {
+  for (const role of ROLES) {
+    const expected = role === 'OWNER';
+    assert.equal(ROLE_PERMISSIONS[role].includes('role:grant'), expected, `${role} role:grant`);
+    assert.equal(ROLE_PERMISSIONS[role].includes('tenant:settings'), expected, `${role} tenant:settings`);
+  }
+});
+
+test('rbac: an accountant can read money but cannot change operations', () => {
+  const acct = ROLE_PERMISSIONS.ACCOUNTANT;
+  assert.ok(acct.includes('report:cost'));
+  assert.ok(acct.includes('payable:pay'));
+  assert.equal(acct.includes('menu:write'), false);
+  assert.equal(acct.includes('order:create'), false);
+  assert.equal(acct.includes('employee:write'), false);
+});
+
+test('rbac: no grants at all means no permission', () => {
+  assert.equal(can([], 'order:read'), false);
+  assert.equal(canAt([], 'order:read', 'branch-a'), false);
 });

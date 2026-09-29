@@ -650,6 +650,103 @@ async function main() {
   r = await call('POST', '/orders/quick-bill', quickBody, { idempotencyKey: uuid() });
   check('replayed quick-bill returns the original bill', r.body?.replayed === true, `replayed=${r.body?.replayed}`);
 
+  // ── Cross-branch access ───────────────────────────────────────────────────
+  // The defect this covers: most endpoints that act on a record take the record's id and
+  // no branch, so a guard reading the request cannot scope it. Before the fix, a manager
+  // at one branch could settle, void or credit-note another branch's orders by id alone.
+  const secondCode = `TST${stamp}`;
+  r = await call('POST', '/branches', {
+    code: secondCode,
+    name: `Test Branch ${stamp}`,
+    addressLine1: '1 Test Road',
+    city: 'Hyderabad',
+    state: 'Telangana',
+    pincode: '500001',
+    geofenceRadiusM: 100,
+    operatingHours: {},
+    isActive: true,
+  });
+  const otherBranch = r.body;
+  check('create a second branch', r.status === 201 && !!otherBranch?.id, secondCode);
+
+  if (otherBranch?.id) {
+    // A manager scoped to the SECOND branch only.
+    r = await call('POST', '/users', {
+      name: `Branch Manager ${stamp}`,
+      email: `mgr-${stamp.toLowerCase()}@example.com`,
+      role: 'MANAGER',
+      branchId: otherBranch.id,
+    });
+    const scopedLogin = r.body;
+    check('create a manager scoped to that branch only', r.status === 201 && !!scopedLogin?.temporaryPassword);
+
+    // An unsettled order at the FIRST branch for them to try to reach.
+    const victimRef = uuid();
+    r = await call('POST', '/orders', {
+      branchId,
+      clientRef: victimRef,
+      channel: 'TAKEAWAY',
+      mealSlot: 'LUNCH',
+      items: [{ variantId: regular.variantId, qty: 1 }],
+      discountMinor: 0,
+    });
+    const victim = r.body;
+
+    const ownerToken2 = token;
+    r = await call(
+      'POST',
+      '/auth/staff/login',
+      {
+        tenantSlug: TENANT,
+        identifier: `mgr-${stamp.toLowerCase()}@example.com`,
+        password: scopedLogin.temporaryPassword,
+        client: 'WEB',
+      },
+      { noAuth: true },
+    );
+    token = r.body?.accessToken;
+    check('the scoped manager can sign in', !!token, `status ${r.status}`);
+
+    if (token) {
+      r = await call('POST', '/orders/settle', {
+        orderId: victim.id,
+        tenders: [{ tender: 'CASH', amountMinor: victim.totalMinor, tenderedMinor: victim.totalMinor }],
+      });
+      check('cannot settle another branch’s order', r.status === 403, `status ${r.status}`);
+
+      r = await call('GET', `/orders/${victim.id}`);
+      check('cannot even read another branch’s order', r.status === 403, `status ${r.status}`);
+
+      r = await call('POST', '/orders/cancel', { orderId: victim.id, reason: 'attempting cross-branch' });
+      check('cannot cancel another branch’s order', r.status === 403, `status ${r.status}`);
+
+      // …but is not locked out of their own branch.
+      r = await call('GET', `/menu/branch/${otherBranch.id}?mealSlot=LUNCH`);
+      check('the scoped manager still works at their own branch', r.status === 200, `status ${r.status}`);
+
+      r = await call('GET', `/reports/today/${branchId}`);
+      check('cannot read another branch’s takings', r.status === 403, `status ${r.status}`);
+    }
+
+    token = ownerToken2;
+    await call('POST', '/orders/cancel', { orderId: victim.id, reason: 'smoke test cleanup' }).catch(() => {});
+
+    // Close the test branch so it stops appearing in the branch picker. Branches are
+    // never deleted — orders and stock reference them — so closing is the correct verb.
+    await call('PUT', `/branches/${otherBranch.id}`, {
+      code: otherBranch.code,
+      name: otherBranch.name,
+      addressLine1: otherBranch.addressLine1,
+      city: otherBranch.city,
+      state: otherBranch.state,
+      pincode: otherBranch.pincode,
+      geofenceRadiusM: 100,
+      operatingHours: {},
+      isActive: false,
+    }).catch(() => {});
+    await call('PATCH', `/users/${scopedLogin?.user?.id}/active`, { isActive: false }).catch(() => {});
+  }
+
   // ── Payments ──────────────────────────────────────────────────────────────
   r = await call('GET', '/payments/status', null, { noAuth: true });
   check('payment gateway status is advertised', r.status === 200, `onlineEnabled=${r.body?.onlineEnabled}`);

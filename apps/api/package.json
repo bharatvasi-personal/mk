@@ -15,7 +15,8 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:security": "node scripts/apply-sql.mjs",
     "db:seed": "tsx prisma/seed.ts",
-    "db:reset": "prisma migrate reset --force && npm run db:security && npm run db:seed"
+    "db:reset": "prisma migrate reset --force && npm run db:security && npm run db:seed",
+    "audit:rbac": "node scripts/audit-rbac.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
