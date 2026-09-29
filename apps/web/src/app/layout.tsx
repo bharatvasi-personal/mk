@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { Providers } from '@/components/providers';
+import { ServiceWorkerRegistrar } from '@/components/service-worker';
 import { BRAND_NAME } from '@/lib/config';
 
 export const metadata: Metadata = {
@@ -20,6 +21,12 @@ export const metadata: Metadata = {
     'lunch thali 502300',
   ],
   robots: { index: true, follow: true },
+  manifest: '/manifest.webmanifest',
+  appleWebApp: { capable: true, title: BRAND_NAME, statusBarStyle: 'default' },
+  icons: {
+    icon: [{ url: '/icon-192.png', sizes: '192x192', type: 'image/png' }],
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180' }],
+  },
   openGraph: {
     type: 'website',
     siteName: BRAND_NAME,
@@ -40,6 +47,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html>
       <body>
         <Providers>{children}</Providers>
+        <ServiceWorkerRegistrar />
         {/* Rendered off-screen and made visible only by the print stylesheet. */}
         <pre id="thermal-bill" aria-hidden className="hidden" />
       </body>

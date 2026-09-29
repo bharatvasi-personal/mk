@@ -12,7 +12,7 @@ export interface PosLine {
   notes?: string;
 }
 
-interface PosState {
+export interface PosState {
   channel: 'DINE_IN' | 'TAKEAWAY';
   tableId: string | null;
   mealSlot: string;

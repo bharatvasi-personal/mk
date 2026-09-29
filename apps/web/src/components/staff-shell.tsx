@@ -21,13 +21,19 @@ export function StaffShell({
   requires,
   title,
   actions,
+  banner,
   wide = false,
+  flush = false,
 }: {
   children: ReactNode;
   requires?: Permission;
   title?: string;
   actions?: ReactNode;
+  /** Full-bleed strip between the nav and the content — the POS shift bar lives here. */
+  banner?: ReactNode;
   wide?: boolean;
+  /** Drop the main padding, for screens that manage their own full-height layout. */
+  flush?: boolean;
 }) {
   const { session, loading, can, branches, branchId, setBranchId, signOut } = useSession();
   const dict = useDict();
@@ -102,7 +108,10 @@ export function StaffShell({
         </div>
       </header>
       <StaffNav />
-      <main className={`mx-auto px-4 py-6 ${wide ? '' : 'max-w-7xl'}`}>{children}</main>
+      {banner}
+      <main className={`${flush ? '' : 'mx-auto px-4 py-6'} ${wide || flush ? '' : 'max-w-7xl'}`}>
+        {children}
+      </main>
     </div>
   );
 }

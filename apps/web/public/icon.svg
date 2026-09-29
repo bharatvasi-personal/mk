@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- The app mark: the Devanagari "म" of Mithila on the brand brown. Chosen over a
+       generic food glyph because the shop's identity is regional, not "restaurant". -->
+  <rect width="512" height="512" rx="112" fill="#a85516"/>
+  <text x="256" y="352" font-family="Georgia, 'Times New Roman', serif" font-size="300"
+        font-weight="bold" fill="#fdf6ed" text-anchor="middle">म</text>
+</svg>
