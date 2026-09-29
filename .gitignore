@@ -13,3 +13,7 @@ coverage/
 apps/api/generated/
 backups/
 .turbo/
+
+# Compiled output of the shared package, produced by `npm test -w @mk/shared`.
+# Tracked by accident once; it makes every test run look like a source change.
+.test-build/
