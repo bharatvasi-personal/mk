@@ -574,6 +574,74 @@ export class OrdersService {
     );
   }
 
+  /**
+   * Bill history.
+   *
+   * The counter needs yesterday's bill far more often than anyone expects: a customer
+   * comes back about a wrong charge, a partner wants to see what a ₹2,400 table actually
+   * ordered, the accountant is reconciling a UPI statement. Searchable by token number,
+   * invoice number and phone, because those are the three things a person actually has
+   * in front of them when they ask.
+   */
+  async history(opts: {
+    branchId: string;
+    from?: string;
+    to?: string;
+    status?: OrderStatus;
+    channel?: string;
+    search?: string;
+    page: number;
+    pageSize: number;
+  }) {
+    return this.db.run(async (tx) => {
+      const search = opts.search?.trim();
+      const asNumber = search && /^\d+$/.test(search) ? Number(search) : undefined;
+
+      const where: Prisma.OrderWhereInput = {
+        branchId: opts.branchId,
+        ...(opts.status ? { status: opts.status } : {}),
+        ...(opts.channel ? { channel: opts.channel as never } : {}),
+        ...(opts.from || opts.to
+          ? {
+              createdAt: {
+                ...(opts.from ? { gte: new Date(`${opts.from}T00:00:00+05:30`) } : {}),
+                ...(opts.to ? { lte: new Date(`${opts.to}T23:59:59+05:30`) } : {}),
+              },
+            }
+          : {}),
+        ...(search
+          ? {
+              OR: [
+                ...(asNumber !== undefined ? [{ tokenNo: asNumber }] : []),
+                { customerPhone: { contains: search } },
+                { customerName: { contains: search, mode: 'insensitive' as const } },
+                { invoice: { invoiceNo: { contains: search, mode: 'insensitive' as const } } },
+              ],
+            }
+          : {}),
+      };
+
+      const [total, rows] = await Promise.all([
+        tx.order.count({ where }),
+        tx.order.findMany({
+          where,
+          include: {
+            items: { where: { isVoided: false }, select: { nameSnapshot: true, variantSnapshot: true, qty: true } },
+            payments: { select: { tender: true, amountMinor: true, reference: true } },
+            invoice: { select: { invoiceNo: true } },
+            table: { select: { label: true } },
+            creditNotes: { select: { id: true, noteNo: true, amountMinor: true, reason: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+          skip: (opts.page - 1) * opts.pageSize,
+          take: opts.pageSize,
+        }),
+      ]);
+
+      return { total, page: opts.page, pageSize: opts.pageSize, rows };
+    });
+  }
+
   async kitchenQueue(branchId: string, station?: KitchenStation) {
     return this.db.run((tx) =>
       tx.kitchenTicket.findMany({

@@ -3,6 +3,8 @@ import { ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
 import {
   KITCHEN_STATIONS,
+  ORDER_CHANNELS,
+  ORDER_STATUSES,
   cancelOrderSchema,
   closeCashSessionSchema,
   createOrderSchema,
@@ -106,6 +108,43 @@ export class OrdersController {
     body: { orderId: string; amountMinor: number; reason: string },
   ) {
     return this.orders.issueCreditNote(body.orderId, body.amountMinor, body.reason);
+  }
+
+  @Get('history')
+  @RequirePermissions('order:read')
+  @ApiOperation({
+    summary: 'Past bills, searchable by token, invoice number, phone or name',
+    description:
+      'The three things a person has in front of them when they ask about a bill are a ' +
+      'token number, an invoice number or a phone number — so all three search.',
+  })
+  history(
+    @Query(
+      zodBody(
+        z.object({
+          branchId: uuid,
+          from: z.string().optional(),
+          to: z.string().optional(),
+          status: z.enum(ORDER_STATUSES).optional(),
+          channel: z.enum(ORDER_CHANNELS).optional(),
+          search: z.string().max(80).optional(),
+          page: z.coerce.number().int().min(1).default(1),
+          pageSize: z.coerce.number().int().min(1).max(100).default(25),
+        }),
+      ),
+    )
+    q: {
+      branchId: string;
+      from?: string;
+      to?: string;
+      status?: never;
+      channel?: string;
+      search?: string;
+      page: number;
+      pageSize: number;
+    },
+  ) {
+    return this.orders.history(q);
   }
 
   @Get('open')

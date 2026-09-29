@@ -55,8 +55,12 @@ export class MenuController {
 
   @Get('items')
   @RequirePermissions('menu:read')
-  listItems(@Query('categoryId') categoryId?: string, @Query('search') search?: string) {
-    return this.menu.listItems({ categoryId, search });
+  listItems(
+    @Query('categoryId') categoryId?: string,
+    @Query('search') search?: string,
+    @Query('includeInactive') includeInactive?: string,
+  ) {
+    return this.menu.listItems({ categoryId, search, includeInactive: includeInactive === 'true' });
   }
 
   @Post('items')

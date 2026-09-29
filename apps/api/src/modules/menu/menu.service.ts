@@ -132,10 +132,14 @@ export class MenuService {
     );
   }
 
-  async listItems(opts: { categoryId?: string; search?: string } = {}) {
+  async listItems(opts: { categoryId?: string; search?: string; includeInactive?: boolean } = {}) {
     return this.db.run((tx) =>
       tx.menuItem.findMany({
         where: {
+          // Removed dishes are hidden unless asked for. They are never deleted — bills and
+          // the stock ledger reference them — but a list that grows forever with things
+          // taken off the menu years ago is a list nobody scans.
+          ...(opts.includeInactive ? {} : { isActive: true }),
           ...(opts.categoryId ? { categoryId: opts.categoryId } : {}),
           ...(opts.search ? { name: { contains: opts.search, mode: 'insensitive' } } : {}),
         },

@@ -126,6 +126,7 @@ function StaffNav() {
     { href: `/${locale}/pos`, label: dict.pos.title, permission: 'order:create' },
     { href: `/${locale}/kitchen`, label: dict.pos.kitchen, permission: 'kitchen:read' },
     { href: `/${locale}/admin`, label: dict.admin.dashboard, permission: 'report:sales' },
+    { href: `/${locale}/admin/orders`, label: dict.admin.orders, permission: 'order:read' },
     { href: `/${locale}/admin/inventory`, label: dict.admin.inventory, permission: 'inventory:read' },
     { href: `/${locale}/admin/purchasing`, label: dict.admin.purchasing, permission: 'vendor:read' },
     { href: `/${locale}/admin/staff`, label: dict.admin.staff, permission: 'employee:read' },
@@ -134,6 +135,7 @@ function StaffNav() {
     { href: `/${locale}/admin/reports`, label: dict.admin.reports, permission: 'report:cost' },
     { href: `/${locale}/admin/menu`, label: dict.admin.menu, permission: 'menu:write' },
     { href: `/${locale}/admin/import`, label: dict.admin.import, permission: 'inventory:write' },
+    { href: `/${locale}/admin/branches`, label: dict.admin.branches, permission: 'branch:read' },
   ] satisfies { href: string; label: string; permission?: Permission }[]).filter(
     (i) => !i.permission || can(i.permission),
   );
