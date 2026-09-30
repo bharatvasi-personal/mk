@@ -15,8 +15,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
   // Prisma RESETS the shadow database whenever it computes a migration diff. Naming it
   // explicitly here means a `migrate dev` or `migrate diff` can never be pointed at the
   // real database by accident — which drops every row in it.
@@ -53,6 +53,7 @@ model Tenant {
   customers         Customer[]
   menuCategories    MenuCategory[]
   menuItems         MenuItem[]
+  modifierGroups    ModifierGroup[]
   orders            Order[]
   inventoryItems    InventoryItem[]
   vendors           Vendor[]
@@ -334,16 +335,82 @@ model MenuItem {
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
-  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  category        MenuCategory      @relation(fields: [categoryId], references: [id])
+  tenant          Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category        MenuCategory            @relation(fields: [categoryId], references: [id])
   variants        MenuItemVariant[]
   branchMenuItems BranchMenuItem[]
   recipes         Recipe[]
   orderItems      OrderItem[]
+  modifierGroups  MenuItemModifierGroup[]
 
   @@unique([tenantId, slug])
   @@index([tenantId, categoryId, isActive])
   @@map("menu_items")
+}
+
+/// A reusable set of choices attached to a dish — "Spice level", "Add-ons",
+/// "Choose your noodles". One group is shared across many dishes, so "extra spicy"
+/// is defined once and the Chinese counter and the thali both point at it.
+model ModifierGroup {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String
+  nameI18n  Json     @default("{}") @map("name_i18n")
+  /// Fewest options the guest must pick. 1+ makes the group required.
+  minSelect Int      @default(0) @map("min_select")
+  /// Most they may pick. 1 = single-choice (radio); 0 = unlimited.
+  maxSelect Int      @default(1) @map("max_select")
+  isActive  Boolean  @default(true) @map("is_active")
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant    Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  options   ModifierOption[]
+  itemLinks MenuItemModifierGroup[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, isActive])
+  @@map("modifier_groups")
+}
+
+/// One choice inside a group. The price delta is GST-inclusive paise, added to the
+/// line's unit price — 0 for a plain choice like "medium spicy", positive for a paid
+/// add-on like "extra roti". Never negative: a discount is not a modifier.
+model ModifierOption {
+  id              String  @id @default(uuid()) @db.Uuid
+  tenantId        String  @map("tenant_id") @db.Uuid
+  groupId         String  @map("group_id") @db.Uuid
+  name            String
+  nameI18n        Json    @default("{}") @map("name_i18n")
+  priceDeltaMinor Int     @default(0) @map("price_delta_minor")
+  isDefault       Boolean @default(false) @map("is_default")
+  isActive        Boolean @default(true) @map("is_active")
+  sortOrder       Int     @default(0) @map("sort_order")
+
+  group              ModifierGroup       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  orderItemModifiers OrderItemModifier[]
+
+  @@unique([groupId, name])
+  @@index([tenantId, groupId])
+  @@map("modifier_options")
+}
+
+/// Which groups a dish shows, and in what order. Many-to-many, because a group is
+/// shared and a dish carries several.
+model MenuItemModifierGroup {
+  id              String @id @default(uuid()) @db.Uuid
+  tenantId        String @map("tenant_id") @db.Uuid
+  menuItemId      String @map("menu_item_id") @db.Uuid
+  modifierGroupId String @map("modifier_group_id") @db.Uuid
+  sortOrder       Int    @default(0) @map("sort_order")
+
+  menuItem      MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  modifierGroup ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+
+  @@unique([menuItemId, modifierGroupId])
+  @@index([tenantId, menuItemId])
+  @@map("menu_item_modifier_groups")
 }
 
 /// Half/Full, Small/Large. Every item has at least one (a DEFAULT variant).
@@ -541,10 +608,30 @@ model OrderItem {
   menuItem    MenuItem            @relation(fields: [menuItemId], references: [id])
   variant     MenuItemVariant     @relation(fields: [variantId], references: [id])
   ticketItems KitchenTicketItem[]
+  modifiers   OrderItemModifier[]
 
   @@index([tenantId, orderId])
   @@index([tenantId, menuItemId])
   @@map("order_items")
+}
+
+/// The modifiers chosen on one order line, snapshotted like the name and variant so a
+/// reprinted bill still reads what was actually served and charged.
+model OrderItemModifier {
+  id              String  @id @default(uuid()) @db.Uuid
+  tenantId        String  @map("tenant_id") @db.Uuid
+  orderItemId     String  @map("order_item_id") @db.Uuid
+  /// Kept nullable: the option may be retired later, the sale record stays.
+  optionId        String? @map("option_id") @db.Uuid
+  groupSnapshot   String  @map("group_snapshot")
+  nameSnapshot    String  @map("name_snapshot")
+  priceDeltaMinor Int     @map("price_delta_minor")
+
+  orderItem OrderItem       @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  option    ModifierOption? @relation(fields: [optionId], references: [id])
+
+  @@index([tenantId, orderItemId])
+  @@map("order_item_modifiers")
 }
 
 /// Append-only status history. Answers "why did this order take 40 minutes".

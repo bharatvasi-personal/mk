@@ -135,6 +135,7 @@ function StaffNav() {
     { href: `/${locale}/admin/expenses`, label: dict.admin.expenses, permission: 'expense:read' },
     { href: `/${locale}/admin/reports`, label: dict.admin.reports, permission: 'report:cost' },
     { href: `/${locale}/admin/menu`, label: dict.admin.menu, permission: 'menu:write' },
+    { href: `/${locale}/admin/modifiers`, label: 'Modifiers', permission: 'menu:write' },
     { href: `/${locale}/admin/import`, label: dict.admin.import, permission: 'inventory:write' },
     { href: `/${locale}/admin/branches`, label: dict.admin.branches, permission: 'branch:read' },
     { href: `/${locale}/admin/audit`, label: dict.admin.audit, permission: 'audit:read' },

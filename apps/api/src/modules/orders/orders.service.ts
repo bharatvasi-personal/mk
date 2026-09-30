@@ -12,7 +12,7 @@ import { TenantDb, type Tx } from '../../common/prisma/tenant-db.service';
 import { TenantContext } from '../../common/tenant/tenant-context';
 import { RecipeService } from '../inventory/recipe.service';
 import { currentTenant } from '../menu/menu.service';
-import { financialYear, priceOrder, type PricedLine } from './pricing';
+import { financialYear, priceOrder, type PricedLine, type PricedModifier } from './pricing';
 import { assertBranchAccess } from '../../common/auth/branch-access';
 
 /** Which kitchen station prepares a category. The Chinese counter gets its own tickets. */
@@ -108,6 +108,15 @@ export class OrdersService {
               lineTaxMinor: l.lineTaxMinor,
               lineTotalMinor: l.lineTotalMinor,
               notes: l.notes,
+              modifiers: {
+                create: l.modifiers.map((m) => ({
+                  tenantId,
+                  optionId: m.optionId,
+                  groupSnapshot: m.groupSnapshot,
+                  nameSnapshot: m.nameSnapshot,
+                  priceDeltaMinor: m.priceDeltaMinor,
+                })),
+              },
             })),
           },
           statusEvents: {
@@ -140,7 +149,10 @@ export class OrdersService {
         include: {
           items: {
             where: { isVoided: false },
-            include: { menuItem: { select: { name: true, category: { select: { slug: true } } } } },
+            include: {
+              menuItem: { select: { name: true, category: { select: { slug: true } } } },
+              modifiers: { select: { nameSnapshot: true } },
+            },
           },
           kitchenTickets: true,
         },
@@ -177,7 +189,11 @@ export class OrdersService {
                   tenantId,
                   orderItemId: i.id,
                   qty: i.qty,
-                  notes: i.notes,
+                  // The kitchen must see the choices — "extra spicy", "schezwan" — so the
+                  // modifier names lead the ticket note, ahead of any free-text note.
+                  notes: [i.modifiers.map((m) => m.nameSnapshot).join(' · '), i.notes]
+                    .filter(Boolean)
+                    .join(' — ') || null,
                 })),
               },
             },
@@ -702,7 +718,10 @@ export class OrdersService {
     const order = await tx.order.findUniqueOrThrow({
       where: { id: orderId },
       include: {
-        items: { where: { isVoided: false } },
+        items: {
+          where: { isVoided: false },
+          include: { modifiers: { select: { nameSnapshot: true, priceDeltaMinor: true } } },
+        },
         payments: true,
         invoice: true,
         table: { select: { label: true } },
@@ -728,6 +747,10 @@ export class OrdersService {
         qty: i.qty,
         unitPriceMinor: i.unitPriceMinor,
         lineTotalMinor: i.lineTotalMinor,
+        modifiers: i.modifiers.map((m) => ({
+          name: m.nameSnapshot,
+          priceDeltaMinor: m.priceDeltaMinor,
+        })),
       })),
       subtotalMinor: order.subtotalMinor,
       discountMinor: order.discountMinor,
@@ -755,6 +778,25 @@ export class OrdersService {
     });
     const byVariant = new Map(rows.map((r) => [r.variantId, r]));
 
+    // The modifier groups for every dish in this order, in one query. A menu item's
+    // groups are the same at every branch — modifiers are catalogue, not branch pricing —
+    // so this is keyed on menu item, not on the branch-menu row.
+    const menuItemIds = [...new Set(rows.map((r) => r.menuItemId))];
+    const groupLinks = await tx.menuItemModifierGroup.findMany({
+      where: { menuItemId: { in: menuItemIds } },
+      include: {
+        modifierGroup: {
+          include: { options: { where: { isActive: true } } },
+        },
+      },
+    });
+    const groupsByItem = new Map<string, typeof groupLinks>();
+    for (const link of groupLinks) {
+      const list = groupsByItem.get(link.menuItemId) ?? [];
+      list.push(link);
+      groupsByItem.set(link.menuItemId, list);
+    }
+
     const now = new Date();
     const lines: Omit<PricedLine, 'lineSubtotalMinor' | 'lineDiscountMinor' | 'lineTaxMinor' | 'lineTotalMinor'>[] = [];
 
@@ -769,6 +811,13 @@ export class OrdersService {
       if (row.soldOutUntil && row.soldOutUntil > now) {
         throw new BadRequestException(`${row.menuItem.name} is sold out`);
       }
+
+      const { modifiers, modifiersPriceMinor } = this.resolveModifiers(
+        row.menuItem.name,
+        groupsByItem.get(row.menuItemId) ?? [],
+        item.optionIds ?? [],
+      );
+
       lines.push({
         variantId: row.variantId,
         menuItemId: row.menuItemId,
@@ -777,6 +826,8 @@ export class OrdersService {
         qty: item.qty,
         unitPriceMinor: row.priceMinor,
         gstRateBp: row.gstRateBp,
+        modifiersPriceMinor,
+        modifiers,
         notes: item.notes,
       });
     }
@@ -784,11 +835,68 @@ export class OrdersService {
     return priceOrder(lines, { discountMinor: input.discountMinor });
   }
 
+  /**
+   * Validate the chosen options against the dish's groups and price them.
+   *
+   * The client is never trusted for price or for which options belong to a dish. An
+   * option that isn't on one of this dish's groups is rejected; a required group with
+   * too few or a single-choice group with too many is rejected; and the price delta
+   * comes from the option row, not from anything the POS sent. Snapshots are taken here
+   * so a reprinted bill still reads what was actually served.
+   */
+  private resolveModifiers(
+    dishName: string,
+    links: {
+      modifierGroup: {
+        name: string;
+        minSelect: number;
+        maxSelect: number;
+        options: { id: string; name: string; priceDeltaMinor: number }[];
+      };
+    }[],
+    optionIds: string[],
+  ): { modifiers: PricedModifier[]; modifiersPriceMinor: number } {
+    const chosen = new Set(optionIds);
+    const modifiers: PricedModifier[] = [];
+    const seen = new Set<string>();
+
+    for (const link of links) {
+      const g = link.modifierGroup;
+      const picked = g.options.filter((o) => chosen.has(o.id));
+      for (const o of picked) seen.add(o.id);
+
+      if (picked.length < g.minSelect) {
+        throw new BadRequestException(`${dishName}: choose at least ${g.minSelect} from "${g.name}"`);
+      }
+      if (g.maxSelect > 0 && picked.length > g.maxSelect) {
+        throw new BadRequestException(`${dishName}: choose at most ${g.maxSelect} from "${g.name}"`);
+      }
+      for (const o of picked) {
+        modifiers.push({
+          optionId: o.id,
+          groupSnapshot: g.name,
+          nameSnapshot: o.name,
+          priceDeltaMinor: o.priceDeltaMinor,
+        });
+      }
+    }
+
+    // Anything sent that is not an option on any of this dish's groups is a client error,
+    // not something to silently drop — a dropped option means a wrong kitchen ticket.
+    const stray = optionIds.filter((id) => !seen.has(id));
+    if (stray.length > 0) {
+      throw new BadRequestException(`${dishName}: one or more chosen options are not available for it`);
+    }
+
+    const modifiersPriceMinor = modifiers.reduce((s, m) => s + m.priceDeltaMinor, 0);
+    return { modifiers, modifiersPriceMinor };
+  }
+
   /** Recomputes totals after a void. Prices come from the stored line snapshots. */
   private async reprice(tx: Tx, orderId: string) {
     const order = await tx.order.findUniqueOrThrow({
       where: { id: orderId },
-      include: { items: { where: { isVoided: false } } },
+      include: { items: { where: { isVoided: false }, include: { modifiers: true } } },
     });
     const priced = priceOrder(
       order.items.map((i) => ({
@@ -799,6 +907,15 @@ export class OrdersService {
         qty: i.qty,
         unitPriceMinor: i.unitPriceMinor,
         gstRateBp: i.gstRateBp,
+        // Rebuilt from the stored snapshots so a repriced order keeps the add-ons the
+        // customer was already charged for.
+        modifiersPriceMinor: i.modifiers.reduce((s, m) => s + m.priceDeltaMinor, 0),
+        modifiers: i.modifiers.map((m) => ({
+          optionId: m.optionId ?? '',
+          groupSnapshot: m.groupSnapshot,
+          nameSnapshot: m.nameSnapshot,
+          priceDeltaMinor: m.priceDeltaMinor,
+        })),
       })),
       { discountMinor: 0 },
     );

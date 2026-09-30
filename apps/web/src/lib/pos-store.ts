@@ -2,7 +2,16 @@
 
 import { create } from 'zustand';
 
+export interface PosLineModifier {
+  optionId: string;
+  name: string;
+  priceDeltaMinor: number;
+}
+
 export interface PosLine {
+  /** Cart-local id. A variant can appear twice with different add-ons, so the variant id
+   *  is no longer unique — this is. */
+  lineId: string;
   variantId: string;
   menuItemId: string;
   name: string;
@@ -10,6 +19,18 @@ export interface PosLine {
   priceMinor: number;
   qty: number;
   notes?: string;
+  optionIds: string[];
+  modifiers: PosLineModifier[];
+}
+
+/** The dish price plus whatever add-ons were chosen, per unit. */
+export function lineUnitMinor(line: Pick<PosLine, 'priceMinor' | 'modifiers'>): number {
+  return line.priceMinor + line.modifiers.reduce((s, m) => s + m.priceDeltaMinor, 0);
+}
+
+/** Two lines merge only when they are the same variant with the same add-ons. */
+function signature(variantId: string, optionIds: string[]): string {
+  return `${variantId}|${[...optionIds].sort().join(',')}`;
 }
 
 export interface PosState {
@@ -25,9 +46,9 @@ export interface PosState {
   setSlot: (s: string) => void;
   setGuests: (n: number) => void;
   setDiscount: (minor: number, reason: string) => void;
-  add: (line: Omit<PosLine, 'qty'>) => void;
-  bump: (variantId: string, delta: number) => void;
-  setNotes: (variantId: string, notes: string) => void;
+  add: (line: Omit<PosLine, 'qty' | 'lineId'>) => void;
+  bump: (lineId: string, delta: number) => void;
+  setNotes: (lineId: string, notes: string) => void;
   reset: () => void;
   subtotalMinor: () => number;
   count: () => number;
@@ -55,23 +76,24 @@ export const usePos = create<PosState>((set, get) => ({
   setDiscount: (discountMinor, discountReason) => set({ discountMinor, discountReason }),
   add: (line) =>
     set((state) => {
-      const existing = state.lines.find((l) => l.variantId === line.variantId);
+      const sig = signature(line.variantId, line.optionIds);
+      const existing = state.lines.find((l) => signature(l.variantId, l.optionIds) === sig);
       if (existing) {
         return {
-          lines: state.lines.map((l) => (l.variantId === line.variantId ? { ...l, qty: l.qty + 1 } : l)),
+          lines: state.lines.map((l) => (l.lineId === existing.lineId ? { ...l, qty: l.qty + 1 } : l)),
         };
       }
-      return { lines: [...state.lines, { ...line, qty: 1 }] };
+      return { lines: [...state.lines, { ...line, qty: 1, lineId: crypto.randomUUID() }] };
     }),
-  bump: (variantId, delta) =>
+  bump: (lineId, delta) =>
     set((state) => ({
       lines: state.lines
-        .map((l) => (l.variantId === variantId ? { ...l, qty: l.qty + delta } : l))
+        .map((l) => (l.lineId === lineId ? { ...l, qty: l.qty + delta } : l))
         .filter((l) => l.qty > 0),
     })),
-  setNotes: (variantId, notes) =>
-    set((state) => ({ lines: state.lines.map((l) => (l.variantId === variantId ? { ...l, notes } : l)) })),
+  setNotes: (lineId, notes) =>
+    set((state) => ({ lines: state.lines.map((l) => (l.lineId === lineId ? { ...l, notes } : l)) })),
   reset: () => set({ lines: [], discountMinor: 0, discountReason: '', tableId: null, guestCount: 1 }),
-  subtotalMinor: () => get().lines.reduce((s, l) => s + l.priceMinor * l.qty, 0),
+  subtotalMinor: () => get().lines.reduce((s, l) => s + lineUnitMinor(l) * l.qty, 0),
   count: () => get().lines.reduce((s, l) => s + l.qty, 0),
 }));

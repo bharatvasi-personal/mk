@@ -113,12 +113,45 @@ export class MenuService {
         byItem.set(row.menuItem.id, entry);
       }
 
+      // The add-on and choice groups for every dish on this menu, in one query, so a card
+      // can render its "extra spicy" or "which noodles" picker. Modifiers are catalogue,
+      // not branch pricing, so this is keyed on the menu item.
+      const links = await tx.menuItemModifierGroup.findMany({
+        where: { menuItemId: { in: [...byItem.keys()] }, modifierGroup: { isActive: true } },
+        include: {
+          modifierGroup: {
+            include: { options: { where: { isActive: true }, orderBy: { sortOrder: 'asc' } } },
+          },
+        },
+        orderBy: { sortOrder: 'asc' },
+      });
+      const modsByItem = new Map<string, unknown[]>();
+      for (const l of links) {
+        const g = l.modifierGroup;
+        const list = modsByItem.get(l.menuItemId) ?? [];
+        list.push({
+          id: g.id,
+          name: g.name,
+          nameI18n: g.nameI18n,
+          minSelect: g.minSelect,
+          maxSelect: g.maxSelect,
+          options: g.options.map((o) => ({
+            id: o.id,
+            name: o.name,
+            nameI18n: o.nameI18n,
+            priceDeltaMinor: o.priceDeltaMinor,
+            isDefault: o.isDefault,
+          })),
+        });
+        modsByItem.set(l.menuItemId, list);
+      }
+
       const categories = new Map<string, { id: string; name: string; nameI18n: unknown; slug: string; sortOrder: number; mealSlot: string; items: unknown[] }>();
       for (const { item, variants } of byItem.values()) {
         const c = item.category;
         const bucket =
           categories.get(c.id) ?? { ...c, items: [] as unknown[] };
-        bucket.items.push({ ...item, category: undefined, variants });
+        bucket.items.push({ ...item, category: undefined, variants, modifierGroups: modsByItem.get(item.id) ?? [] });
         categories.set(c.id, bucket);
       }
 

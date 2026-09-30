@@ -11,10 +11,10 @@ import { ShiftBar } from '@/components/pos/shift-bar';
 import { useDict, useLocale } from '@/lib/dict';
 import { useSession } from '@/lib/session';
 import { get } from '@/lib/api';
-import { usePos, type PosLine, type PosState } from '@/lib/pos-store';
+import { usePos, lineUnitMinor, type PosLine, type PosLineModifier, type PosState } from '@/lib/pos-store';
 import { useOfflineQueue } from '@/lib/use-offline';
 import { printBill, renderThermalBill, type BillPayload } from '@/lib/print';
-import type { PublicMenuCategory } from '@/lib/server-api';
+import type { PublicMenuCategory, PublicModifierGroup } from '@/lib/server-api';
 
 const MENU_CACHE_KEY = 'mk.pos.menu';
 
@@ -29,6 +29,7 @@ interface Tile {
   priceMinor: number;
   isSoldOut: boolean;
   foodType: string;
+  modifierGroups: PublicModifierGroup[];
 }
 
 export default function PosPage() {
@@ -75,7 +76,12 @@ function Pos() {
   const [settling, setSettling] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [discounting, setDiscounting] = useState(false);
-  const [qtyFor, setQtyFor] = useState<{ variantId: string; name: string; current: number } | null>(null);
+  const [qtyFor, setQtyFor] = useState<
+    | { mode: 'line'; lineId: string; name: string; current: number }
+    | { mode: 'tile'; tile: Tile; name: string; current: number }
+    | null
+  >(null);
+  const [pickingFor, setPickingFor] = useState<Tile | null>(null);
   const [lastBill, setLastBill] = useState<BillPayload | null>(null);
   const [queuedNotice, setQueuedNotice] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -148,6 +154,7 @@ function Pos() {
           priceMinor: v.priceMinor,
           isSoldOut: v.isSoldOut,
           foodType: i.foodType,
+          modifierGroups: i.modifierGroups ?? [],
         })),
       ),
     );
@@ -173,12 +180,20 @@ function Pos() {
   const addTile = useCallback(
     (tile: Tile) => {
       if (tile.isSoldOut) return;
+      // A dish with choices can't be added blind — the counter has to pick the spice or
+      // the add-ons first. Everything else drops straight onto the ticket.
+      if (tile.modifierGroups.length > 0) {
+        setPickingFor(tile);
+        return;
+      }
       pos.add({
         variantId: tile.variantId,
         menuItemId: tile.menuItemId,
         name: tile.name,
         variantName: tile.variantName,
         priceMinor: tile.priceMinor,
+        optionIds: [],
+        modifiers: [],
       });
       // A short haptic on a tablet confirms the tap landed without the cashier looking
       // up from the customer. Silently absent on desktop.
@@ -201,7 +216,12 @@ function Pos() {
         mealSlot: pos.mealSlot,
         tableId: pos.tableId ?? undefined,
         guestCount: pos.channel === 'DINE_IN' ? pos.guestCount : undefined,
-        items: pos.lines.map((l) => ({ variantId: l.variantId, qty: l.qty, notes: l.notes })),
+        items: pos.lines.map((l) => ({
+          variantId: l.variantId,
+          qty: l.qty,
+          notes: l.notes,
+          optionIds: l.optionIds,
+        })),
         discountMinor: pos.discountMinor,
         discountReason: pos.discountReason || undefined,
         tenders,
@@ -242,7 +262,7 @@ function Pos() {
       onSettle={() => setSettling(true)}
       onClear={() => setConfirmClear(true)}
       onDiscount={() => setDiscounting(true)}
-      onEditQty={(line) => setQtyFor({ variantId: line.variantId, name: line.name, current: line.qty })}
+      onEditQty={(line) => setQtyFor({ mode: 'line', lineId: line.lineId, name: line.name, current: line.qty })}
       lastBill={lastBill}
       queuedNotice={queuedNotice}
       onDismissLast={() => {
@@ -328,7 +348,11 @@ function Pos() {
                 key={tile.key}
                 tile={tile}
                 onTap={() => addTile(tile)}
-                onHold={() => setQtyFor({ variantId: tile.variantId, name: tile.name, current: qtyOnTicket.get(tile.variantId) ?? 0 })}
+                onHold={() =>
+                  tile.modifierGroups.length > 0
+                    ? setPickingFor(tile)
+                    : setQtyFor({ mode: 'tile', tile, name: tile.name, current: qtyOnTicket.get(tile.variantId) ?? 0 })
+                }
                 qty={qtyOnTicket.get(tile.variantId) ?? 0}
                 soldOutLabel={dict.menu.soldOut}
               />
@@ -382,23 +406,55 @@ function Pos() {
           initial={qtyFor.current}
           onCancel={() => setQtyFor(null)}
           onConfirm={(qty) => {
-            const existing = pos.lines.find((l) => l.variantId === qtyFor.variantId);
-            if (existing) {
-              pos.bump(qtyFor.variantId, qty - existing.qty);
+            if (qtyFor.mode === 'line') {
+              const existing = pos.lines.find((l) => l.lineId === qtyFor.lineId);
+              if (existing) pos.bump(qtyFor.lineId, qty - existing.qty);
             } else if (qty > 0) {
-              const tile = tiles.find((t) => t.variantId === qtyFor.variantId);
-              if (tile) {
+              // The fast-add pad, only reached for a plain dish (a dish with choices opens
+              // the picker instead). Merge onto a matching plain line if one exists.
+              const t = qtyFor.tile;
+              const existing = pos.lines.find(
+                (l) => l.variantId === t.variantId && l.optionIds.length === 0,
+              );
+              if (existing) {
+                pos.bump(existing.lineId, qty - existing.qty);
+              } else {
                 pos.add({
-                  variantId: tile.variantId,
-                  menuItemId: tile.menuItemId,
-                  name: tile.name,
-                  variantName: tile.variantName,
-                  priceMinor: tile.priceMinor,
+                  variantId: t.variantId,
+                  menuItemId: t.menuItemId,
+                  name: t.name,
+                  variantName: t.variantName,
+                  priceMinor: t.priceMinor,
+                  optionIds: [],
+                  modifiers: [],
                 });
-                pos.bump(tile.variantId, qty - 1);
+                const added = usePos.getState().lines.find(
+                  (l) => l.variantId === t.variantId && l.optionIds.length === 0,
+                );
+                if (added) pos.bump(added.lineId, qty - 1);
               }
             }
             setQtyFor(null);
+          }}
+        />
+      ) : null}
+
+      {pickingFor ? (
+        <ModifierPicker
+          tile={pickingFor}
+          onCancel={() => setPickingFor(null)}
+          onConfirm={(optionIds, modifiers) => {
+            pos.add({
+              variantId: pickingFor.variantId,
+              menuItemId: pickingFor.menuItemId,
+              name: pickingFor.name,
+              variantName: pickingFor.variantName,
+              priceMinor: pickingFor.priceMinor,
+              optionIds,
+              modifiers,
+            });
+            navigator.vibrate?.(8);
+            setPickingFor(null);
           }}
         />
       ) : null}
@@ -608,23 +664,30 @@ function Ticket({
         ) : (
           <ul className="space-y-1.5">
             {pos.lines.map((l) => (
-              <li key={l.variantId} className="rounded-lg border border-ink-100 p-2">
+              <li key={l.lineId} className="rounded-lg border border-ink-100 p-2">
                 <div className="flex items-start gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-semibold">{l.name}</div>
                     <div className="text-xs text-ink-400">
                       {l.variantName} · {formatMinor(l.priceMinor)}
                     </div>
+                    {l.modifiers.length > 0 ? (
+                      <div className="mt-0.5 text-xs text-brand-700">
+                        {l.modifiers
+                          .map((m) => (m.priceDeltaMinor ? `${m.name} +${formatMinor(m.priceDeltaMinor)}` : m.name))
+                          .join(' · ')}
+                      </div>
+                    ) : null}
                   </div>
                   <span className="whitespace-nowrap text-sm font-bold tabular-nums">
-                    {formatMinor(l.priceMinor * l.qty)}
+                    {formatMinor(lineUnitMinor(l) * l.qty)}
                   </span>
                 </div>
 
                 <div className="mt-1.5 flex items-center gap-2">
                   <button
                     className="pos-tap grid h-10 w-10 place-items-center rounded-lg border border-ink-200 text-xl active:bg-ink-100"
-                    onClick={() => pos.bump(l.variantId, -1)}
+                    onClick={() => pos.bump(l.lineId, -1)}
                     aria-label={`Remove one ${l.name}`}
                   >
                     −
@@ -639,7 +702,7 @@ function Ticket({
                   </button>
                   <button
                     className="pos-tap grid h-10 w-10 place-items-center rounded-lg border border-ink-200 text-xl active:bg-ink-100"
-                    onClick={() => pos.bump(l.variantId, 1)}
+                    onClick={() => pos.bump(l.lineId, 1)}
                     aria-label={`Add one ${l.name}`}
                   >
                     +
@@ -648,7 +711,7 @@ function Ticket({
                     className="h-10 min-w-0 flex-1 rounded-lg border border-ink-100 px-2 text-xs"
                     placeholder="less spicy…"
                     value={l.notes ?? ''}
-                    onChange={(e) => pos.setNotes(l.variantId, e.target.value)}
+                    onChange={(e) => pos.setNotes(l.lineId, e.target.value)}
                   />
                 </div>
               </li>
@@ -808,6 +871,122 @@ function QuantityDialog({
         </Button>
         <Button size="lg" onClick={() => onConfirm(qty)}>
           {dict.common.confirm}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * The choice screen for a dish that carries modifiers.
+ *
+ * This is the whole point of modifiers for the counter: the Chinese order that is "half
+ * plate, extra spicy, add egg" can't be a plain tap. A single-choice group behaves like
+ * radio buttons; a multi group counts against its limit; a required group blocks the
+ * Add button until it is answered. Prices come from the options, and the running delta
+ * is shown so the cashier can read the total back to the customer before committing.
+ */
+function ModifierPicker({
+  tile,
+  onCancel,
+  onConfirm,
+}: {
+  tile: Tile;
+  onCancel: () => void;
+  onConfirm: (optionIds: string[], modifiers: PosLineModifier[]) => void;
+}) {
+  const dict = useDict();
+  const [selected, setSelected] = useState<Record<string, string[]>>(() => {
+    const initial: Record<string, string[]> = {};
+    for (const g of tile.modifierGroups) {
+      const defaults = g.options.filter((o) => o.isDefault).map((o) => o.id);
+      initial[g.id] = g.maxSelect === 1 ? defaults.slice(0, 1) : defaults;
+    }
+    return initial;
+  });
+
+  function toggle(group: PublicModifierGroup, optionId: string) {
+    setSelected((prev) => {
+      const cur = prev[group.id] ?? [];
+      if (group.maxSelect === 1) return { ...prev, [group.id]: [optionId] };
+      if (cur.includes(optionId)) return { ...prev, [group.id]: cur.filter((id) => id !== optionId) };
+      if (group.maxSelect !== 0 && cur.length >= group.maxSelect) return prev; // at the limit
+      return { ...prev, [group.id]: [...cur, optionId] };
+    });
+  }
+
+  const chosen = tile.modifierGroups.flatMap((g) =>
+    (selected[g.id] ?? []).map((id) => {
+      const o = g.options.find((opt) => opt.id === id)!;
+      return { optionId: o.id, name: o.name, priceDeltaMinor: o.priceDeltaMinor };
+    }),
+  );
+  const deltaMinor = chosen.reduce((s, m) => s + m.priceDeltaMinor, 0);
+  const unmet = tile.modifierGroups.filter((g) => (selected[g.id] ?? []).length < g.minSelect);
+
+  return (
+    <Modal label={tile.name} onClose={onCancel}>
+      <h2 className="font-display text-lg font-semibold">{tile.name}</h2>
+      <p className="text-sm text-ink-400">{tile.variantName}</p>
+
+      <div className="my-3 space-y-4">
+        {tile.modifierGroups.map((g) => {
+          const cur = selected[g.id] ?? [];
+          const rule =
+            g.minSelect >= 1 && g.maxSelect === 1
+              ? 'Pick one'
+              : g.maxSelect === 1
+                ? 'Pick one'
+                : g.maxSelect === 0
+                  ? g.minSelect >= 1
+                    ? `Pick at least ${g.minSelect}`
+                    : 'Pick any'
+                  : `Up to ${g.maxSelect}`;
+          return (
+            <div key={g.id}>
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className="text-sm font-semibold">{g.name}</span>
+                <span className={`text-xs ${cur.length < g.minSelect ? 'text-red-600' : 'text-ink-400'}`}>
+                  {g.minSelect >= 1 ? 'Required · ' : ''}
+                  {rule}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {g.options.map((o) => {
+                  const on = cur.includes(o.id);
+                  return (
+                    <button
+                      key={o.id}
+                      type="button"
+                      onClick={() => toggle(g, o.id)}
+                      aria-pressed={on}
+                      className={`pos-tap flex items-center justify-between gap-1 rounded-lg border px-3 py-2.5 text-left text-sm font-medium ${
+                        on ? 'border-brand-600 bg-brand-50 text-brand-800' : 'border-ink-200 bg-white text-ink-700'
+                      }`}
+                    >
+                      <span className="truncate">{o.name}</span>
+                      {o.priceDeltaMinor ? (
+                        <span className="shrink-0 text-xs tabular-nums">+{formatMinor(o.priceDeltaMinor)}</span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <Button variant="secondary" size="lg" onClick={onCancel}>
+          {dict.common.cancel}
+        </Button>
+        <Button
+          size="lg"
+          disabled={unmet.length > 0}
+          onClick={() => onConfirm(chosen.map((m) => m.optionId), chosen)}
+        >
+          Add · {formatMinor(tile.priceMinor + deltaMinor)}
         </Button>
       </div>
     </Modal>

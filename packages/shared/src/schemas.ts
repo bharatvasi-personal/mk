@@ -135,12 +135,53 @@ export const setSoldOutSchema = z.object({
   soldOutUntil: z.string().datetime().nullable(),
 });
 
+export type ModifierGroupInput = z.infer<typeof modifierGroupSchema>;
+export type ModifierOptionInput = z.infer<typeof modifierOptionSchema>;
+export type MenuItemModifiersInput = z.infer<typeof menuItemModifiersSchema>;
+
+// ─── Modifiers / add-ons ─────────────────────────────────────────────────────
+
+export const modifierOptionSchema = z.object({
+  id: uuid.optional(),
+  name: z.string().min(1).max(60),
+  nameI18n: i18nText,
+  /** GST-inclusive paise added to the line's unit price. Never negative. */
+  priceDeltaMinor: z.number().int().min(0).max(100000).default(0),
+  isDefault: z.boolean().default(false),
+  sortOrder: z.number().int().default(0),
+});
+
+export const modifierGroupSchema = z
+  .object({
+    name: z.string().min(1).max(60),
+    nameI18n: i18nText,
+    /** 1+ makes the group required; 0 leaves it optional. */
+    minSelect: z.number().int().min(0).max(20).default(0),
+    /** 1 = single-choice, 0 = unlimited, N = up to N. */
+    maxSelect: z.number().int().min(0).max(20).default(1),
+    isActive: z.boolean().default(true),
+    sortOrder: z.number().int().default(0),
+    options: z.array(modifierOptionSchema).min(1, 'A group needs at least one option'),
+  })
+  .refine((g) => g.maxSelect === 0 || g.maxSelect >= g.minSelect, {
+    message: 'Max choices cannot be fewer than the minimum required',
+    path: ['maxSelect'],
+  });
+
+/** Attach a set of groups to a dish, in display order. */
+export const menuItemModifiersSchema = z.object({
+  menuItemId: uuid,
+  groupIds: z.array(uuid),
+});
+
 // ─── Orders / POS ────────────────────────────────────────────────────────────
 
 export const orderLineInputSchema = z.object({
   variantId: uuid,
   qty: z.number().int().min(1).max(200),
   notes: z.string().max(200).optional(),
+  /** Chosen modifier option ids. Validated against the item's groups server-side. */
+  optionIds: z.array(uuid).default([]),
 });
 
 export const createOrderSchema = z.object({

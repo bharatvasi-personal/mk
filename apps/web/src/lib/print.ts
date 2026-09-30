@@ -14,7 +14,14 @@ export interface BillPayload {
   issuedAt: string;
   customerName?: string | null;
   customerPhone?: string | null;
-  lines: { name: string; variant: string; qty: number; unitPriceMinor: number; lineTotalMinor: number }[];
+  lines: {
+    name: string;
+    variant: string;
+    qty: number;
+    unitPriceMinor: number;
+    lineTotalMinor: number;
+    modifiers?: { name: string; priceDeltaMinor: number }[];
+  }[];
   subtotalMinor: number;
   discountMinor: number;
   taxMinor: number;
@@ -81,6 +88,13 @@ export function renderThermalBill(bill: BillPayload, opts: { copy?: 'CUSTOMER' |
   for (const l of bill.lines) {
     const title = `${l.name}${l.variant && l.variant !== 'Regular' ? ` (${l.variant})` : ''}`;
     out.push(title.slice(0, WIDTH));
+    // Add-ons under the dish, each on its own indented line, so the bill reads what the
+    // customer actually got and the paid ones are visible against the line total.
+    for (const m of l.modifiers ?? []) {
+      out.push(
+        `  + ${m.name}${m.priceDeltaMinor ? ` (${formatMinor(m.priceDeltaMinor, { withSymbol: false })})` : ''}`.slice(0, WIDTH),
+      );
+    }
     out.push(row(`  ${l.qty} x ${formatMinor(l.unitPriceMinor, { withSymbol: false })}`, formatMinor(l.lineTotalMinor, { withSymbol: false })));
   }
 

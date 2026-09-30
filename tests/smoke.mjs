@@ -601,6 +601,130 @@ async function main() {
     `variance ${money(r.body?.varianceMinor ?? 0)}`,
   );
 
+  // ── Modifiers / add-ons ───────────────────────────────────────────────────
+  //
+  // The Chinese counter can't take "extra spicy, add roti" without these. The API is the
+  // authority: it prices the add-on from the option row, validates required and
+  // single-choice groups, and rejects an option the client tries to inject.
+  {
+    const stamp = uuid().slice(0, 6).toUpperCase();
+    let m = await call('POST', '/menu/modifiers/groups', {
+      name: `Add-ons ${stamp}`,
+      minSelect: 0,
+      maxSelect: 0,
+      options: [
+        { name: 'Extra roti', priceDeltaMinor: 1500 },
+        { name: 'Extra gravy', priceDeltaMinor: 2000 },
+      ],
+    });
+    check('create an add-on group', m.status === 201 && m.body?.options?.length === 2, `status ${m.status}`);
+    const addonGroup = m.body;
+    const rotiId = addonGroup.options.find((o) => o.name === 'Extra roti')?.id;
+
+    m = await call('POST', '/menu/modifiers/groups', {
+      name: `Spice ${stamp}`,
+      minSelect: 1,
+      maxSelect: 1,
+      options: [
+        { name: 'Mild', priceDeltaMinor: 0 },
+        { name: 'Spicy', priceDeltaMinor: 0 },
+      ],
+    });
+    check('create a required single-choice group', m.status === 201 && m.body?.minSelect === 1, `status ${m.status}`);
+    const spiceGroup = m.body;
+    const spicyId = spiceGroup.options.find((o) => o.name === 'Spicy')?.id;
+    const mildId = spiceGroup.options.find((o) => o.name === 'Mild')?.id;
+
+    // The Veg Roti Thali (₹99) gets both groups.
+    const vegRoti = thaliCat.items.find((i) => i.slug === 'ghar-ki-thali-veg-roti-thali');
+    const vegRotiVariant = vegRoti.variants.find((v) => v.name === 'Regular');
+    m = await call('PUT', '/menu/modifiers/item', {
+      menuItemId: vegRoti.id,
+      groupIds: [spiceGroup.id, addonGroup.id],
+    });
+    check('attach two groups to a dish', m.status === 200 && m.body?.length === 2, `${m.body?.length} linked`);
+
+    m = await call('GET', `/menu/branch/${branchId}?mealSlot=LUNCH`);
+    const cardWithMods = m.body
+      ?.find((c) => c.slug === 'ghar-ki-thali')
+      ?.items.find((i) => i.slug === 'ghar-ki-thali-veg-roti-thali');
+    check(
+      'the branch menu exposes the groups on the dish card',
+      cardWithMods?.modifierGroups?.length === 2,
+      `${cardWithMods?.modifierGroups?.length} groups`,
+    );
+
+    // ₹99 + Spicy (free) + Extra roti (+₹15) = ₹114.
+    m = await call('POST', '/orders', {
+      branchId,
+      clientRef: uuid(),
+      channel: 'DINE_IN',
+      mealSlot: 'LUNCH',
+      guestCount: 1,
+      items: [{ variantId: vegRotiVariant.variantId, qty: 1, optionIds: [spicyId, rotiId] }],
+      discountMinor: 0,
+    });
+    check(
+      'a paid add-on is priced from the option, not the client',
+      m.status === 201 && m.body?.totalMinor === 11400,
+      `total ${money(m.body?.totalMinor ?? 0)} (expected ₹114.00)`,
+    );
+    const modOrderId = m.body?.id;
+
+    m = await call('POST', '/orders', {
+      branchId,
+      clientRef: uuid(),
+      channel: 'DINE_IN',
+      mealSlot: 'LUNCH',
+      guestCount: 1,
+      items: [{ variantId: vegRotiVariant.variantId, qty: 1, optionIds: [] }],
+      discountMinor: 0,
+    });
+    check('a required group with no choice is rejected', m.status === 400, `status ${m.status}`);
+
+    m = await call('POST', '/orders', {
+      branchId,
+      clientRef: uuid(),
+      channel: 'DINE_IN',
+      mealSlot: 'LUNCH',
+      guestCount: 1,
+      items: [{ variantId: vegRotiVariant.variantId, qty: 1, optionIds: [spicyId, mildId] }],
+      discountMinor: 0,
+    });
+    check('two picks in a single-choice group are rejected', m.status === 400, `status ${m.status}`);
+
+    m = await call('POST', '/orders', {
+      branchId,
+      clientRef: uuid(),
+      channel: 'DINE_IN',
+      mealSlot: 'LUNCH',
+      guestCount: 1,
+      items: [{ variantId: vegRotiVariant.variantId, qty: 1, optionIds: [spicyId, uuid()] }],
+      discountMinor: 0,
+    });
+    check('an option not on the dish is rejected', m.status === 400, `status ${m.status}`);
+
+    m = await call('GET', `/orders/${modOrderId}/bill`);
+    check(
+      'the bill snapshots the chosen modifiers',
+      m.body?.lines?.[0]?.modifiers?.length === 2,
+      m.body?.lines?.[0]?.modifiers?.map((x) => x.name).join(', '),
+    );
+
+    // Clean up: cancel the order, detach the groups, retire them.
+    await call('POST', '/orders/cancel', { orderId: modOrderId, reason: 'smoke test cleanup' });
+    await call('PUT', '/menu/modifiers/item', { menuItemId: vegRoti.id, groupIds: [] });
+    for (const grp of [addonGroup, spiceGroup]) {
+      await call('PUT', `/menu/modifiers/groups/${grp.id}`, {
+        name: grp.name,
+        minSelect: grp.minSelect,
+        maxSelect: grp.maxSelect,
+        isActive: false,
+        options: grp.options.map((o) => ({ id: o.id, name: o.name, priceDeltaMinor: o.priceDeltaMinor })),
+      });
+    }
+  }
+
   // ── Taking a dish variant off the menu and putting it back ────────────────
   //
   // Removing a variant deactivates it rather than deleting it, so it keeps holding the

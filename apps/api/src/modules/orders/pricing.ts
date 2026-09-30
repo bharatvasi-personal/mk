@@ -1,5 +1,12 @@
 import { extractGst, roundToRupee } from '@mk/shared';
 
+export interface PricedModifier {
+  optionId: string;
+  groupSnapshot: string;
+  nameSnapshot: string;
+  priceDeltaMinor: number;
+}
+
 export interface PricedLine {
   variantId: string;
   menuItemId: string;
@@ -8,6 +15,9 @@ export interface PricedLine {
   qty: number;
   unitPriceMinor: number;
   gstRateBp: number;
+  /** Sum of the chosen modifiers' deltas, per unit. Added to unit price for the line total. */
+  modifiersPriceMinor: number;
+  modifiers: PricedModifier[];
   lineSubtotalMinor: number;
   lineDiscountMinor: number;
   lineTaxMinor: number;
@@ -43,7 +53,11 @@ export function priceOrder(
   const discountMinor = opts.discountMinor ?? 0;
 
   const priced: PricedLine[] = lines.map((l) => {
-    const lineTotal = l.unitPriceMinor * l.qty;
+    // The customer pays for the dish plus whatever add-ons were chosen. The base unit
+    // price stays visible on the bill; the modifiers are listed under it, and both are
+    // taxed together because the whole line is one GST-inclusive amount.
+    const effectiveUnit = l.unitPriceMinor + l.modifiersPriceMinor;
+    const lineTotal = effectiveUnit * l.qty;
     return {
       ...l,
       lineSubtotalMinor: lineTotal,

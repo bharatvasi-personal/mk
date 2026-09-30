@@ -51,6 +51,24 @@ export interface PublicMenuVariant {
   dailyLimit: number | null;
 }
 
+export interface PublicModifierOption {
+  id: string;
+  name: string;
+  nameI18n: Record<string, string> | null;
+  priceDeltaMinor: number;
+  isDefault: boolean;
+}
+
+export interface PublicModifierGroup {
+  id: string;
+  name: string;
+  nameI18n: Record<string, string> | null;
+  minSelect: number;
+  /** 1 = single-choice, 0 = unlimited, N = up to N. */
+  maxSelect: number;
+  options: PublicModifierOption[];
+}
+
 export interface PublicMenuItem {
   id: string;
   name: string;
@@ -65,6 +83,7 @@ export interface PublicMenuItem {
   spiceLevel: number | null;
   allergens: string[];
   variants: PublicMenuVariant[];
+  modifierGroups?: PublicModifierGroup[];
 }
 
 export interface PublicMenuCategory {
