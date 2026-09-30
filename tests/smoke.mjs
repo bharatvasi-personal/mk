@@ -601,6 +601,60 @@ async function main() {
     `variance ${money(r.body?.varianceMinor ?? 0)}`,
   );
 
+  // ── Taking a dish variant off the menu and putting it back ────────────────
+  //
+  // Removing a variant deactivates it rather than deleting it, so it keeps holding the
+  // (menuItemId, name) pair. The dish editor has no id for a name it is re-adding, so the
+  // create collided with that constraint and the screen answered "That record already
+  // exists" for a dish the kitchen was simply putting back on.
+  {
+    const cat = (await call('GET', '/menu/categories')).body?.[0];
+    const stamp = uuid().slice(0, 6).toUpperCase();
+    const dish = (variantList) => ({
+      categoryId: cat.id,
+      name: `Smoke Variant ${stamp}`,
+      nameI18n: {},
+      descriptionI18n: {},
+      foodType: 'VEG',
+      isLessOil: false,
+      isMithilaSpecial: false,
+      isChefSpecial: false,
+      allergens: [],
+      sortOrder: 0,
+      isActive: true,
+      variants: variantList,
+    });
+
+    r = await call(
+      'POST',
+      '/menu/items',
+      dish([
+        { name: 'Regular', nameI18n: {}, isDefault: true, sortOrder: 0 },
+        { name: 'Full', nameI18n: {}, isDefault: false, sortOrder: 1 },
+      ]),
+    );
+    const dishId = r.body?.id;
+    const regularId = r.body?.variants?.find((v) => v.name === 'Regular')?.id;
+    const keepRegular = [{ id: regularId, name: 'Regular', nameI18n: {}, isDefault: true, sortOrder: 0 }];
+
+    r = await call('PUT', `/menu/items/${dishId}`, dish(keepRegular));
+    check('a variant can be taken off a dish', r.status === 200, `status ${r.status}`);
+
+    r = await call(
+      'PUT',
+      `/menu/items/${dishId}`,
+      dish([...keepRegular, { name: 'Full', nameI18n: {}, isDefault: false, sortOrder: 1 }]),
+    );
+    check(
+      'and put back under the same name',
+      r.status === 200 && r.body?.variants?.some((v) => v.name === 'Full' && v.isActive),
+      `status ${r.status}`,
+    );
+
+    // Deactivated rather than deleted: order lines and recipes still point at it.
+    await call('PUT', `/menu/items/${dishId}`, { ...dish(keepRegular), isActive: false });
+  }
+
   // ── Money that comes back from raw SQL ────────────────────────────────────
   //
   // Postgres sums arrive as BigInt and JSON.stringify throws on one, so this endpoint used

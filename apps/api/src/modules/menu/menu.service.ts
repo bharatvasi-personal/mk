@@ -196,16 +196,32 @@ export class MenuService {
         const before = await tx.menuItem.findUniqueOrThrow({ where: { id }, include: { variants: true } });
         const updated = await tx.menuItem.update({ where: { id }, data: { ...item, slug } });
 
+        // Upsert rather than create for a variant with no id: one removed earlier was
+        // deactivated, not deleted, and still holds the (menuItemId, name) pair. The
+        // editor has no id for a name it is re-adding, so a plain create collided with
+        // that constraint and the screen answered "That record already exists" for a dish
+        // the kitchen was simply putting back on. Same shape as the
+        // deactivated-then-reimported bug in the menu importer.
+        const keptIds: string[] = [];
         for (const v of variants) {
-          if (v.id) {
-            await tx.menuItemVariant.update({ where: { id: v.id }, data: { ...v, id: undefined } });
-          } else {
-            await tx.menuItemVariant.create({ data: { ...v, id: undefined, menuItemId: id, tenantId } });
-          }
+          const saved = v.id
+            ? await tx.menuItemVariant.update({
+                where: { id: v.id },
+                data: { ...v, id: undefined, isActive: true },
+              })
+            : await tx.menuItemVariant.upsert({
+                where: { menuItemId_name: { menuItemId: id, name: v.name } },
+                create: { ...v, id: undefined, menuItemId: id, tenantId },
+                update: { ...v, id: undefined, isActive: true },
+              });
+          keptIds.push(saved.id);
         }
+
         // Variants that disappeared are deactivated, not deleted — historical order
-        // lines and recipes still point at them.
-        const keptIds = variants.filter((v) => v.id).map((v) => v.id!);
+        // lines and recipes still point at them. Keyed on what was actually written, not
+        // on which inputs arrived carrying an id: a re-added variant has no id in the
+        // request, and keying on the request deactivated it again one statement after
+        // restoring it.
         await tx.menuItemVariant.updateMany({
           where: { menuItemId: id, id: { notIn: keptIds.length ? keptIds : ['00000000-0000-0000-0000-000000000000'] } },
           data: { isActive: false },
