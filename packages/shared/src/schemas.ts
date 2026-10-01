@@ -20,6 +20,10 @@ import {
   ORDER_CHANNELS,
   STOCK_MOVEMENT_REASONS,
   TENDER_TYPES,
+  SUBSCRIPTION_PLANS,
+  SUBSCRIPTION_STATUSES,
+  DIET_TYPES,
+  MEAL_SHIFTS,
 } from './enums';
 import { ROLES } from './rbac';
 
@@ -557,3 +561,59 @@ export type LegalDocumentInput = z.infer<typeof legalDocumentSchema>;
 export type EmployeeInput = z.infer<typeof employeeSchema>;
 export type VendorInput = z.infer<typeof vendorSchema>;
 export type MenuItemInput = z.infer<typeof menuItemSchema>;
+
+// ─── Subscriptions ───────────────────────────────────────────────────────────
+
+export const subscriptionSchema = z
+  .object({
+    branchId: uuid,
+    customerId: uuid.optional(),
+    customerName: z.string().min(1).max(120),
+    customerPhone: phone,
+    addressLine: z.string().max(300).optional(),
+    area: z.string().max(80).optional(),
+    plan: z.enum(SUBSCRIPTION_PLANS),
+    diet: z.enum(DIET_TYPES),
+    shift: z.enum(MEAL_SHIFTS),
+    daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1, 'Pick at least one delivery day').default([1, 2, 3, 4, 5, 6]),
+    startDate: dateOnly,
+    endDate: dateOnly.optional(),
+    amountMinor: minor,
+    pricePerMealMinor: minor.optional(),
+    notes: z.string().max(400).optional(),
+  })
+  .refine((s) => !s.endDate || s.endDate >= s.startDate, {
+    message: 'End date cannot be before the start date',
+    path: ['endDate'],
+  });
+
+export const subscriptionStatusSchema = z
+  .object({
+    status: z.enum(SUBSCRIPTION_STATUSES),
+    /** Only meaningful with status PAUSED. */
+    pausedFrom: dateOnly.optional(),
+    pausedTo: dateOnly.optional(),
+  })
+  .refine((s) => s.status !== 'PAUSED' || (s.pausedFrom && s.pausedTo), {
+    message: 'A pause needs a from and a to date',
+    path: ['pausedTo'],
+  })
+  .refine((s) => !s.pausedFrom || !s.pausedTo || s.pausedTo >= s.pausedFrom, {
+    message: 'Pause end cannot be before its start',
+    path: ['pausedTo'],
+  });
+
+/** Add or remove one-off skipped days (a festival, travel). */
+export const subscriptionSkipSchema = z.object({
+  dates: z.array(dateOnly),
+});
+
+export const subscriptionPaidSchema = z.object({
+  isPaid: z.boolean(),
+  paidOn: dateOnly.optional(),
+});
+
+export type SubscriptionInput = z.infer<typeof subscriptionSchema>;
+export type SubscriptionStatusInput = z.infer<typeof subscriptionStatusSchema>;
+export type SubscriptionSkipInput = z.infer<typeof subscriptionSkipSchema>;
+export type SubscriptionPaidInput = z.infer<typeof subscriptionPaidSchema>;

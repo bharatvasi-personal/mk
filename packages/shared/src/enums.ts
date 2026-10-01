@@ -258,3 +258,41 @@ export function slotForHour(hour: number): MealSlot {
   if (hour >= 18 && hour < 23) return 'EVENING';
   return 'ALL_DAY';
 }
+
+// ─── Subscriptions (weekly / monthly meal plans) ─────────────────────────────
+
+export const SUBSCRIPTION_PLANS = ['WEEKLY', 'MONTHLY'] as const;
+export type SubscriptionPlan = (typeof SUBSCRIPTION_PLANS)[number];
+
+export const SUBSCRIPTION_STATUSES = ['ACTIVE', 'PAUSED', 'CANCELLED', 'COMPLETED'] as const;
+export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
+
+/** What the subscriber eats. MIXED lets the kitchen alternate. */
+export const DIET_TYPES = ['VEG', 'NON_VEG', 'MIXED'] as const;
+export type DietType = (typeof DIET_TYPES)[number];
+
+/** Which meals the plan covers. Distinct from MEAL_SLOTS — a plan is a standing choice. */
+export const MEAL_SHIFTS = ['LUNCH', 'DINNER', 'BOTH'] as const;
+export type MealShift = (typeof MEAL_SHIFTS)[number];
+
+export const SUBSCRIPTION_PLAN_LABELS: Record<SubscriptionPlan, string> = {
+  WEEKLY: 'Weekly',
+  MONTHLY: 'Monthly',
+};
+
+export const MEAL_SHIFT_LABELS: Record<MealShift, string> = {
+  LUNCH: 'Lunch',
+  DINNER: 'Dinner',
+  BOTH: 'Lunch & Dinner',
+};
+
+export const DIET_LABELS: Record<DietType, string> = {
+  VEG: 'Veg',
+  NON_VEG: 'Non-veg (chicken)',
+  MIXED: 'Mixed',
+};
+
+/** How many meals a shift delivers per day — used to bill and to size the daily list. */
+export function mealsPerDay(shift: MealShift): number {
+  return shift === 'BOTH' ? 2 : 1;
+}

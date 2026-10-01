@@ -705,6 +705,61 @@ async function main() {
     );
   }
 
+  // ── Subscriptions ───────────────────────────────────────────────────────────
+  //
+  // Managed weekly/monthly plans: the record, its lifecycle, and the daily delivery list
+  // the kitchen packs against. Day-of-week, pauses and one-off skips all narrow that list.
+  {
+    const monday = (() => {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() + ((8 - d.getUTCDay()) % 7 || 7)); // the next Monday
+      return d.toISOString().slice(0, 10);
+    })();
+    const mondayDow = new Date(`${monday}T00:00:00.000Z`).getUTCDay();
+
+    let s = await call('POST', '/subscriptions', {
+      branchId,
+      customerName: 'Smoke Subscriber',
+      customerPhone: '9876500000',
+      plan: 'MONTHLY',
+      diet: 'VEG',
+      shift: 'LUNCH',
+      daysOfWeek: [mondayDow],
+      startDate: monday,
+      amountMinor: 450000,
+      area: 'Gachibowli',
+    });
+    check('create a subscription', s.status === 201 && s.body?.status === 'ACTIVE', `status ${s.status}`);
+    const subId = s.body?.id;
+
+    s = await call('GET', `/subscriptions/due/${branchId}?date=${monday}&shift=LUNCH`);
+    check(
+      'the subscriber is on that Monday’s lunch delivery list',
+      s.status === 200 && s.body?.rows?.some((r2) => r2.id === subId) && s.body?.veg >= 1,
+      `${s.body?.total} due, ${s.body?.veg} veg`,
+    );
+
+    // A one-off skip removes them from that day's list.
+    await call('POST', `/subscriptions/${subId}/skips`, { dates: [monday] });
+    s = await call('GET', `/subscriptions/due/${branchId}?date=${monday}&shift=LUNCH`);
+    check('a skipped day drops them from the list', !s.body?.rows?.some((r2) => r2.id === subId), `${s.body?.total} due after skip`);
+
+    // Clear the skip, then a dinner query must not include a lunch-only plan.
+    await call('POST', `/subscriptions/${subId}/skips`, { dates: [] });
+    s = await call('GET', `/subscriptions/due/${branchId}?date=${monday}&shift=DINNER`);
+    check('a lunch-only plan is absent from the dinner list', !s.body?.rows?.some((r2) => r2.id === subId), `${s.body?.total} due at dinner`);
+
+    // Pause covering that Monday also removes them.
+    await call('POST', `/subscriptions/${subId}/status`, { status: 'PAUSED', pausedFrom: monday, pausedTo: monday });
+    s = await call('GET', `/subscriptions/due/${branchId}?date=${monday}&shift=LUNCH`);
+    check('a pause window drops them from the list', !s.body?.rows?.some((r2) => r2.id === subId), `${s.body?.total} due while paused`);
+
+    // Mark paid, then cancel to leave the data clean.
+    s = await call('POST', `/subscriptions/${subId}/paid`, { isPaid: true });
+    check('a subscription can be marked paid', s.status === 201 || s.status === 200, `isPaid ${s.body?.isPaid}`);
+    await call('POST', `/subscriptions/${subId}/status`, { status: 'CANCELLED' });
+  }
+
   // ── Audit trail ───────────────────────────────────────────────────────────
   r = await call('GET', '/reports/audit?entity=Order');
   check(

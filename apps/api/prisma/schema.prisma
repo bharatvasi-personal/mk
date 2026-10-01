@@ -15,8 +15,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
   // Prisma RESETS the shadow database whenever it computes a migration diff. Naming it
   // explicitly here means a `migrate dev` or `migrate diff` can never be pointed at the
   // real database by accident — which drops every row in it.
@@ -54,6 +54,7 @@ model Tenant {
   menuCategories    MenuCategory[]
   menuItems         MenuItem[]
   orders            Order[]
+  subscriptions     Subscription[]
   inventoryItems    InventoryItem[]
   vendors           Vendor[]
   employees         Employee[]
@@ -118,6 +119,7 @@ model Branch {
   dailySummaries    DailySummary[]
   payrollRuns       PayrollRun[]
   legalDocuments    LegalDocument[]
+  subscriptions     Subscription[]
 
   @@unique([tenantId, code])
   @@index([tenantId, isActive])
@@ -226,12 +228,67 @@ model Customer {
   createdAt          DateTime  @default(now()) @map("created_at")
   updatedAt          DateTime  @updatedAt @map("updated_at")
 
-  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  addresses CustomerAddress[]
-  orders    Order[]
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  addresses     CustomerAddress[]
+  orders        Order[]
+  subscriptions Subscription[]
 
   @@unique([tenantId, phone])
   @@map("customers")
+}
+
+/// A standing weekly or monthly meal plan.
+///
+/// The website already sells these; this is where one is actually recorded, managed and
+/// turned into a daily delivery list. Online recurring payment is deliberately out of
+/// scope for now — collection stays however the shop already does it, tracked with the
+/// isPaid flag — so this models the plan and its fulfilment, not a payment schedule.
+model Subscription {
+  id         String  @id @default(uuid()) @db.Uuid
+  tenantId   String  @map("tenant_id") @db.Uuid
+  branchId   String  @map("branch_id") @db.Uuid
+  customerId String? @map("customer_id") @db.Uuid
+
+  /// Snapshot contact, so a plan reads correctly even for a walk-in with no account.
+  customerName  String  @map("customer_name")
+  customerPhone String  @map("customer_phone")
+  addressLine   String? @map("address_line")
+  area          String?
+
+  plan       String // WEEKLY | MONTHLY
+  diet       String // VEG | NON_VEG | MIXED
+  shift      String // LUNCH | DINNER | BOTH
+  /// Days delivered, 0 = Sunday. Default Mon–Sat; a plan can drop days.
+  daysOfWeek Int[]  @default([1, 2, 3, 4, 5, 6]) @map("days_of_week")
+
+  startDate DateTime  @map("start_date") @db.Date
+  endDate   DateTime? @map("end_date") @db.Date
+  status    String    @default("ACTIVE")
+
+  /// A pause window. A day inside it is skipped without ending the plan.
+  pausedFrom DateTime? @map("paused_from") @db.Date
+  pausedTo   DateTime? @map("paused_to") @db.Date
+  /// One-off skipped days (a festival, travel), as ISO date strings.
+  skipDates  String[]  @default([]) @map("skip_dates")
+
+  /// Agreed price for the whole period, in paise. Collection is manual for now.
+  amountMinor       Int       @map("amount_minor")
+  pricePerMealMinor Int?      @map("price_per_meal_minor")
+  isPaid            Boolean   @default(false) @map("is_paid")
+  paidOn            DateTime? @map("paid_on") @db.Date
+
+  notes           String?
+  createdByUserId String?  @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch   Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id])
+
+  @@index([tenantId, branchId, status])
+  @@index([tenantId, customerPhone])
+  @@map("subscriptions")
 }
 
 model CustomerAddress {

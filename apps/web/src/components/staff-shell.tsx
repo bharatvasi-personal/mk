@@ -127,6 +127,7 @@ function StaffNav() {
     { href: `/${locale}/kitchen`, label: dict.pos.kitchen, permission: 'kitchen:read' },
     { href: `/${locale}/admin`, label: dict.admin.dashboard, permission: 'report:sales' },
     { href: `/${locale}/admin/orders`, label: dict.admin.orders, permission: 'order:read' },
+    { href: `/${locale}/admin/subscriptions`, label: 'Subscriptions', permission: 'subscription:read' },
     { href: `/${locale}/admin/inventory`, label: dict.admin.inventory, permission: 'inventory:read' },
     { href: `/${locale}/admin/purchasing`, label: dict.admin.purchasing, permission: 'vendor:read' },
     { href: `/${locale}/admin/staff`, label: dict.admin.staff, permission: 'employee:read' },

@@ -25,6 +25,7 @@ import { PaymentsModule } from './modules/payments/payments.module';
 import { PublicModule } from './modules/public/public.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { StaffModule } from './modules/staff/staff.module';
+import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
 import { VendorsModule } from './modules/vendors/vendors.module';
 import { JobsModule } from './jobs/jobs.module';
 
@@ -50,6 +51,7 @@ import { JobsModule } from './jobs/jobs.module';
     ImportsModule,
     VendorsModule,
     StaffModule,
+    SubscriptionsModule,
     AttendanceModule,
     LegalModule,
     ExpensesModule,

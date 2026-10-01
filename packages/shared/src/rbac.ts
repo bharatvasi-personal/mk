@@ -28,6 +28,9 @@ export const PERMISSIONS = [
   'kitchen:read',
   'kitchen:update',
   'cash_session:manage',
+  // Subscriptions (weekly / monthly meal plans)
+  'subscription:read',
+  'subscription:write',
   // Inventory
   'inventory:read',
   'inventory:write',
@@ -103,6 +106,8 @@ const MANAGER: Permission[] = [
   'kitchen:read',
   'kitchen:update',
   'cash_session:manage',
+  'subscription:read',
+  'subscription:write',
   'inventory:read',
   'inventory:write',
   'inventory:cost:read',
@@ -163,6 +168,7 @@ const HELPER: Permission[] = [
 
 const ACCOUNTANT: Permission[] = [
   'order:read',
+  'subscription:read',
   'inventory:read',
   'inventory:cost:read',
   'vendor:read',
